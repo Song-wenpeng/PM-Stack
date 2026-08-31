@@ -1,0 +1,36 @@
+{
+  "categories": [
+    {
+      "id": "adapter",
+      "name": "插座适配器",
+      "market": "US/DE",
+      "description": "美规/欧规插座适配器，含USB口、无线充电等功能",
+      "keywords": ["adapter", "outlet", "plug", "USB charger"],
+      "target_markets": ["美国", "德国"],
+      "price_range": {
+        "low": 9.99,
+        "high": 29.99,
+        "avg": 16.99,
+        "currency": "USD"
+      },
+      "margin_range": {
+        "low": 25,
+        "high": 45
+      },
+      "market_overview": {
+        "market_size": "中等",
+        "competition_level": "高",
+        "top_brands": ["TESSAN", "Anker", "LENCENT"],
+        "new_product_opportunity": "中等",
+        "notes": "市场成熟，差异化靠功能组合（USB-C、无线充）"
+      },
+      "data_progress": {
+        "review_files": ["评论数据_B0BFDB9MSB.xlsx"],
+        "sales_files": ["Competitor-US-202512.xlsx"],
+        "status": "进行中",
+        "last_updated": "2026-06-08",
+        "notes": "已完成US市场评论分析"
+      }
+    }
+  ]
+}

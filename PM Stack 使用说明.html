@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PM Stack 使用说明书 — 电商数据分析工作台</title>
+<style>
+  :root {
+    --accent: #4d6bfe;
+    --accent-light: #eef1ff;
+    --text1: #1f2329;
+    --text2: #4e5562;
+    --text3: #8f959e;
+    --border: #e5e7eb;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --warn-bg: #fff8e6;
+    --warn-border: #f0c36d;
+    --tip-bg: #eefbf3;
+    --tip-border: #5dbd8a;
+    --danger-bg: #fdeeee;
+    --danger-border: #e08b8b;
+    --code-bg: #f2f3f5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Microsoft YaHei UI", "微软雅黑", "PingFang SC", sans-serif;
+    color: var(--text1);
+    background: var(--bg);
+    line-height: 1.75;
+    font-size: 15px;
+  }
+
+  /* ========== 布局 ========== */
+  .layout { display: flex; max-width: 1280px; margin: 0 auto; }
+
+  /* ========== 侧边目录 ========== */
+  .toc {
+    width: 250px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px;
+    background: var(--card);
+    border-right: 1px solid var(--border);
+  }
+  .toc-brand {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 2px;
+  }
+  .toc-version { font-size: 12px; color: var(--text3); margin-bottom: 20px; }
+  .toc a {
+    display: block;
+    padding: 6px 10px;
+    color: var(--text2);
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 13.5px;
+  }
+  .toc a:hover { background: var(--accent-light); color: var(--accent); }
+  .toc .toc-h1 { font-weight: 600; color: var(--text1); margin-top: 10px; }
+  .toc .toc-h2 { padding-left: 24px; font-size: 13px; }
+
+  /* ========== 正文 ========== */
+  .content { flex: 1; padding: 36px 48px 80px; min-width: 0; }
+  .doc-header { margin-bottom: 36px; }
+  .doc-header h1 { font-size: 30px; margin-bottom: 8px; }
+  .doc-header .subtitle { color: var(--text2); font-size: 15px; }
+  .doc-header .meta { color: var(--text3); font-size: 13px; margin-top: 10px; }
+
+  h2 {
+    font-size: 22px;
+    margin: 44px 0 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  h2:first-of-type { border-top: none; }
+  h3 { font-size: 17px; margin: 28px 0 10px; color: var(--text1); }
+  h4 { font-size: 15px; margin: 18px 0 8px; color: var(--text2); }
+  p { margin: 8px 0; color: var(--text2); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 14px 0;
+  }
+
+  /* 提示框 */
+  .note, .tip, .warn {
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .note { background: var(--accent-light); border-left: 4px solid var(--accent); }
+  .tip  { background: var(--tip-bg); border-left: 4px solid var(--tip-border); }
+  .warn { background: var(--warn-bg); border-left: 4px solid var(--warn-border); }
+  .danger { background: var(--danger-bg); border-left: 4px solid var(--danger-border); border-radius: 8px; padding: 12px 16px; margin: 12px 0; font-size: 14px;}
+  .note .t, .tip .t, .warn .t, .danger .t { font-weight: 600; display: block; margin-bottom: 2px; }
+
+  /* 步骤 */
+  ol.steps { counter-reset: step; list-style: none; margin: 12px 0; }
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 4px 0 12px 42px;
+    color: var(--text2);
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 5px;
+    width: 26px; height: 26px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 26px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  ol.steps > li strong { color: var(--text1); }
+
+  ul.plain { margin: 8px 0 8px 22px; color: var(--text2); }
+  ul.plain li { margin: 4px 0; }
+
+  /* 表格 */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 13.5px;
+    background: var(--card);
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f5f6f8; font-weight: 600; color: var(--text1); white-space: nowrap; }
+  td { color: var(--text2); }
+  tr td:first-child { color: var(--text1); }
+
+  code, kbd {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+    color: #c0344d;
+  }
+  kbd { color: var(--text1); box-shadow: 0 1px 0 var(--border); }
+
+  .badge {
+    display: inline-block;
+    background: var(--accent-light);
+    color: var(--accent);
+    border-radius: 10px;
+    padding: 1px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: 4px;
+    white-space: nowrap;
+  }
+  .badge.warn-badge { background: var(--warn-bg); color: #9a6b12; }
+
+  .module-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .module-head .icon { font-size: 24px; }
+  .module-head .name { font-size: 20px; font-weight: 700; }
+  .module-head .en { color: var(--text3); font-size: 13px; font-weight: 400; }
+
+  hr { border: none; border-top: 1px dashed var(--border); margin: 20px 0; }
+
+  .footer {
+    margin-top: 60px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--text3);
+    font-size: 12.5px;
+  }
+
+  @media (max-width: 900px) {
+    .toc { display: none; }
+    .content { padding: 24px 20px 60px; }
+  }
+  @media print {
+    .toc { display: none; }
+    .content { padding: 0; }
+    body { background: #fff; }
+    h2 { page-break-before: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ==================== 侧边目录 ==================== -->
+  <nav class="toc">
+    <div class="toc-brand">PM Stack</div>
+    <div class="toc-version">V1.10.2 使用说明书</div>
+    <a class="toc-h1" href="#intro">软件简介</a>
+    <a class="toc-h1" href="#install">一、安装与启动</a>
+    <a class="toc-h1" href="#settings">二、初始设置（必做）</a>
+    <a class="toc-h2" href="#settings-api">配置 AI 接口（API Key）</a>
+    <a class="toc-h2" href="#settings-vision">视觉模型配置</a>
+    <a class="toc-h2" href="#settings-update">更新与其他设置</a>
+    <a class="toc-h1" href="#ui">三、界面与通用操作</a>
+    <a class="toc-h1" href="#m1">四、评论分析</a>
+    <a class="toc-h2" href="#m1-step1">AI 提取标签</a>
+    <a class="toc-h2" href="#m1-step2">汇总洞察</a>
+    <a class="toc-h2" href="#m1-full">一键完成 / 批量分析</a>
+    <a class="toc-h1" href="#m1t">五、评论分析 TEST（提速版）</a>
+    <a class="toc-h1" href="#m2">六、销量数据</a>
+    <a class="toc-h2" href="#m2-clean">数据清洗</a>
+    <a class="toc-h2" href="#m2-cross">交叉属性</a>
+    <a class="toc-h2" href="#m2-share">市场占比</a>
+    <a class="toc-h1" href="#m3">七、自适应图表</a>
+    <a class="toc-h1" href="#m4">八、产品矩阵</a>
+    <a class="toc-h1" href="#m5">九、市场规划</a>
+    <a class="toc-h1" href="#data-format">十、数据格式要求汇总</a>
+    <a class="toc-h1" href="#update">十一、软件更新</a>
+    <a class="toc-h1" href="#faq">十二、常见问题 FAQ</a>
+  </nav>
+
+  <!-- ==================== 正文 ==================== -->
+  <main class="content">
+
+    <div class="doc-header">
+      <h1>PM Stack 使用说明书</h1>
+      <div class="subtitle">电商数据分析工作台 · 评论 VOC 分析 / 销量数据 / 智能图表 / 产品矩阵 / 市场规划</div>
+      <div class="meta">适用版本：V1.10.2 &nbsp;|&nbsp; 更新日期：2026-08-31 &nbsp;|&nbsp; 适用对象：运营、产品同事（无需任何编程基础）</div>
+    </div>
+
+    <!-- ==================== 简介 ==================== -->
+    <h2 id="intro">软件简介</h2>
+    <p>PM Stack 是一款 Windows 桌面软件，把日常亚马逊运营/产品分析中最耗时的几类工作做成了「点几下按钮就能跑」的工具：</p>
+    <table>
+      <tr><th style="width:130px">功能模块</th><th>帮你做什么</th><th style="width:180px">是否需要 AI</th></tr>
+      <tr><td>💬 评论分析</td><td>AI 逐条阅读评论，提取优缺点、使用场景、用户身份等标签，再归类汇总成分析结论（VOC 分析）</td><td>需要</td></tr>
+      <tr><td>⚡ 评论分析 TEST</td><td>评论分析的提速版，多条评论同时处理，速度提升约 8~10 倍</td><td>需要</td></tr>
+      <tr><td>📊 销量数据</td><td>销量 Excel 清洗拆分、ASIN 趋势提取、多条件交叉分析、品牌市场份额占比</td><td>不需要</td></tr>
+      <tr><td>📈 自适应图表</td><td>粘贴一块表格数据，AI 自动识别并生成最合适的图表</td><td>需要</td></tr>
+      <tr><td>🧩 产品矩阵</td><td>生成使用场景矩阵、销额透视矩阵、品牌×分类图片矩阵（Excel 嵌入商品主图）</td><td>不需要</td></tr>
+      <tr><td>🎯 市场规划</td><td>AI 从商品描述/主图提取结构化字段、细分市场机会得分、类目初筛、数据采集进度</td><td>部分需要</td></tr>
+    </table>
+    <div class="note">
+      <span class="t">关于 AI 功能</span>
+      标注「需要 AI」的功能依赖一个第三方大模型接口（类似 DeepSeek）。首次使用前必须先在「设置」里填入 API Key，详见第二章。不配 API 时，销量数据、产品矩阵等纯数据处理功能仍可正常使用。
+    </div>
+
+    <!-- ==================== 一、安装 ==================== -->
+    <h2 id="install">一、安装与启动</h2>
+    <p>PM Stack 是免安装的绿色软件，不需要管理员权限，也不写注册表。</p>
+    <ol class="steps">
+      <li><strong>下载并解压</strong>：从同事分享的链接下载压缩包，解压到一个你自己电脑上的文件夹（例如 <code>D:\PM Stack</code> 或桌面）。解压后应能看到三个文件：<code>PM Stack.exe</code>、<code>PM Stack Updater.exe</code>、<code>update-channel.json</code>。</li>
+      <li><strong>双击 <code>PM Stack.exe</code> 启动</strong>。首次启动 Windows 可能弹出蓝色「Windows 已保护你的电脑」提示——这是因为软件没有购买微软代码签名证书，并非病毒。点击 <strong>「更多信息」→「仍要运行」</strong> 即可，之后不再弹出。</li>
+      <li><strong>三个文件始终放在一起</strong>：Updater 负责以后自动升级，分开存放会导致更新失败。</li>
+    </ol>
+    <div class="warn">
+      <span class="t">注意</span>
+      请把软件复制到自己电脑本地再运行，<strong>不要直接在共享盘 / 网盘同步目录里双击运行</strong>，多人占用和断网会导致异常。也建议不要放在中文路径过深的位置。
+    </div>
+    <div class="tip">
+      <span class="t">你的个人配置保存在哪里？</span>
+      所有设置（API Key、主题等）保存在 <code>C:\Users\你的用户名\AppData\Local\PM Stack\config.json</code>，其中 API Key 经过 Windows DPAPI 加密，卸载或换目录都不会丢失配置。
+    </div>
+
+    <!-- ==================== 二、设置 ==================== -->
+    <h2 id="settings">二、初始设置（必做）</h2>
+    <p>点击左侧导航栏最下方的 <strong>齿轮图标</strong> 打开「设置」对话框。</p>
+
+    <h3 id="settings-api">配置 AI 接口（API Key）</h3>
+    <p>AI 功能走「OpenAI 兼容接口」，支持硅基流动（SiliconFlow）、DeepSeek 官方、阿里百炼等服务商。以团队目前使用的<strong>硅基流动</strong>为例：</p>
+    <ol class="steps">
+      <li>打开 siliconflow.cn 注册账号并充值（评论分析按条数消耗费用，几百条评论大约几毛钱到一两元）。</li>
+      <li>在硅基流动后台「API 密钥」页面新建一个密钥，复制 <code>sk-</code> 开头的那串字符。</li>
+      <li>回到 PM Stack，打开 <strong>设置 → API 配置</strong>，填入三项：
+        <table>
+          <tr><th style="width:110px">配置项</th><th>填什么</th></tr>
+          <tr><td>API Key</td><td>刚才复制的 <code>sk-...</code>（输入时显示为圆点，属正常）</td></tr>
+          <tr><td>Base URL</td><td><code>https://api.siliconflow.cn/v1</code></td></tr>
+          <tr><td>Model</td><td><code>deepseek-ai/DeepSeek-V3</code></td></tr>
+        </table>
+      </li>
+      <li>点击「保存」。窗口右上角徽章变为 <strong>「● AI 已配置（未验证）」</strong> 即表示已保存；是否真的连通，跑一次 AI 功能即可验证。</li>
+    </ol>
+    <div class="note">
+      <span class="t">安全说明</span>
+      API Key 使用 Windows 系统级加密（DPAPI）存储在你本机，不会明文写入任何文件，也不会随软件分发给别人——每位同事需要填入自己的 Key（或管理员统一分发的 Key）。
+    </div>
+
+    <h3 id="settings-vision">视觉模型配置（仅「市场规划 → 字段提取」需要）</h3>
+    <p>如果你要用「字段提取」功能里的<strong>图片识别</strong>（让 AI 看商品主图来补全参数），需要一个支持看图的多模态模型：</p>
+    <ul class="plain">
+      <li>三项全部<strong>留空</strong>：默认使用上方主 API 配置，只有主配置的模型本身支持看图时才能用。</li>
+      <li>单独配置：Vision API Key / Vision Base URL 留空可沿用主配置，<strong>Vision Model</strong> 填一个视觉模型，如 <code>Qwen/Qwen3-VL-30B-A3B-Instruct</code>（硅基流动平台可用）。</li>
+    </ul>
+
+    <h3 id="settings-update">更新与其他设置</h3>
+    <table>
+      <tr><th style="width:170px">设置项</th><th>说明</th></tr>
+      <tr><td>主程序更新 update.json</td><td>软件自动更新的清单地址，由管理员统一配置（公司共享盘路径或 HTTPS 地址）。管理员没给地址的话留空即可，不影响使用。</td></tr>
+      <tr><td>启动时自动检查主程序更新</td><td>建议保持勾选，有新版本会弹窗提醒。</td></tr>
+      <tr><td>GitHub 仓库 / 插件更新</td><td>高级功能，普通同事无需填写。</td></tr>
+    </table>
+
+    <!-- ==================== 三、界面 ==================== -->
+    <h2 id="ui">三、界面与通用操作</h2>
+    <div class="card">
+      <h4>界面布局</h4>
+      <ul class="plain">
+        <li><strong>左侧窄导航栏</strong>：一列图标按钮，鼠标悬停 1 秒会显示模块名称和功能说明；导航栏底部是主题切换（月亮/太阳图标）和设置（齿轮图标）。</li>
+        <li><strong>顶部标题栏</strong>：显示当前模块名称和简介，右上角是 AI 配置状态徽章。</li>
+        <li><strong>中间内容区</strong>：每个模块由若干「卡片」组成，每张卡片是一个独立功能，下方黑色区域是运行日志，实时显示处理进度。</li>
+        <li><strong>底部状态栏</strong>：显示 API 配置状态、已加载模块数、当前版本号。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>通用操作技巧</h4>
+      <table>
+        <tr><th style="width:200px">操作</th><th>说明</th></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd> ~ <kbd>6</kbd></td><td>快速切换六个模块</td></tr>
+        <tr><td>拖拽文件</td><td>所有路径输入框都支持直接从资源管理器把文件/文件夹<strong>拖进去</strong>，免去手动选路径</td></tr>
+        <tr><td>输出路径留空</td><td>几乎所有功能的「输出文件」都可以留空，软件会自动在输入文件旁边生成，并加上约定后缀（如 <code>_AI处理</code>、<code>_拆分结果</code>）</td></tr>
+        <tr><td>主题切换</td><td>导航栏底部月亮/太阳图标一键切换深色/浅色，选择会被记住</td></tr>
+        <tr><td>任务互斥</td><td>同一时间只能跑一个任务，运行中点击其他功能会提示「当前有任务正在运行」</td></tr>
+      </table>
+    </div>
+
+    <!-- ==================== 四、评论分析 ==================== -->
+    <h2 id="m1"><span class="module-head"><span class="icon">💬</span><span class="name">四、评论分析</span></span></h2>
+    <p><span class="badge">需要 AI</span> 把成百上千条英文（或其他语言）评论交给 AI 逐条阅读：先翻译并提取结构化标签（优点、缺点、使用场景、用户身份等），再按主题归类汇总成结论。是新品调研和竞品 VOC 分析的核心工具。</p>
+
+    <div class="card">
+      <h4>输入文件要求</h4>
+      <ul class="plain">
+        <li>Excel 文件（.xlsx），通常按星级分 Sheet，如 <code>5 star</code>、<code>4 star</code>、<code>3 star</code>。</li>
+        <li>评论正文默认读取名为 <code>内容</code> 的列。</li>
+        <li>「评论数据表」一栏填写要处理的 Sheet 名，逗号分隔，例如 <code>5 star,4 star,3 star</code>；留空则处理全部 Sheet。</li>
+      </ul>
+      <h4>分析品类</h4>
+      <p>下拉框选择品类模板，模板决定 AI 提取哪些标签维度。当前内置：<strong>转换插头、排插、内窥镜、自动吸尘开关、台锯吸尘场景</strong> 五套模板。页面顶部的「分析品类配置」卡片支持<strong>导入新配置 / 导出当前配置</strong>（JSON 格式），需要新品类模板请联系管理员。</p>
+    </div>
+
+    <h3 id="m1-step1">Tab 1 · AI 提取标签</h3>
+    <ol class="steps">
+      <li>选择或拖入<strong>原始评论 Excel</strong>。</li>
+      <li>选择<strong>分析品类</strong>，按需填写要处理的 Sheet（如 <code>5 star,4 star,3 star</code>）。</li>
+      <li>点击<strong>「开始提取」</strong>。日志区实时滚动每条进度。</li>
+      <li>完成后在输入文件旁得到 <code>原文件名_AI处理.xlsx</code>，每条评论新增翻译、使用场景、正向/负向关注点等列。</li>
+    </ol>
+    <div class="warn">
+      <span class="t">耗时提醒</span>
+      本模块是逐条串行调用 AI，<strong>500 条评论约需 60 分钟</strong>。追求速度请改用第五章的「评论分析 TEST」，实测快 8~10 倍。
+    </div>
+
+    <h3 id="m1-step2">Tab 2 · 汇总洞察</h3>
+    <ol class="steps">
+      <li>「标签文件」选择 Step 1 输出的 <code>_AI处理.xlsx</code>。</li>
+      <li>再次选择同一个分析品类，点击<strong>「开始汇总」</strong>。</li>
+      <li>输出 <code>_AI总结.xlsx</code>：按主题归类的统计汇总与分析结论。</li>
+    </ol>
+
+    <h3 id="m1-full">Tab 3 · 一键完成 / Tab 4 · 批量分析</h3>
+    <ul class="plain">
+      <li><strong>一键完成</strong>：选原始评论文件 + 品类即可，自动串联 提取 → 汇总，最终产出 <code>_AI全流程.xlsx</code>。运行中可点「停止」，当前这条处理完后即停。</li>
+      <li><strong>批量分析</strong>：点「+ 添加文件」加入多个评论文件（每行一个路径），软件依次对每个文件执行完整流程，适合一次跑多个竞品。可指定统一输出目录，留空则各自输出到源文件旁。</li>
+    </ul>
+
+    <!-- ==================== 五、评论分析 TEST ==================== -->
+    <h2 id="m1t"><span class="module-head"><span class="icon">⚡</span><span class="name">五、评论分析 TEST（并发提速版）</span></span></h2>
+    <p><span class="badge">需要 AI</span> <span class="badge warn-badge">测试中</span> 与「一键完成」流程完全相同，但多条评论同时发给 AI 处理。实测 126 条评论从串行约 14 分钟缩短到 80 秒，<strong>加速 8~10 倍</strong>。输出文件带 <code>_TEST</code> 后缀，不会覆盖原流程结果，可放心对比。</p>
+
+    <div class="card">
+      <h4>操作步骤</h4>
+      <ol class="steps">
+        <li>拖入原始评论 Excel，选择品类、填写 Sheet（同评论分析）。</li>
+        <li>按需调整三个速度参数（见下表），一般保持默认即可。</li>
+        <li>点击<strong>「开始/重新分析」</strong>。</li>
+      </ol>
+      <table>
+        <tr><th style="width:150px">参数</th><th style="width:90px">默认值</th><th>说明</th></tr>
+        <tr><td>并发数</td><td>8</td><td>同时处理几条评论（1~12）。实测推荐 8；若日志频繁出现 429（限流）降到 4；12 为高级选项。</td></tr>
+        <tr><td>RPM 安全上限</td><td>900</td><td>每分钟最多请求数，防止触发服务商限流。服务商上限 1000 时建议留 10% 余量。调到 0 表示关闭限速。</td></tr>
+        <tr><td>TPM 安全上限</td><td>90000</td><td>每分钟最多 Token 数，同上原理。</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>断点续跑与失败补跑（本模块独有）</h4>
+      <ul class="plain">
+        <li>每处理 20 条自动保存一次断点，中途停止、断网、关软件都不怕。</li>
+        <li>下次点<strong>「继续/补跑失败」</strong>，自动跳过已成功的条目，只补跑失败和未完成的。</li>
+        <li>Step 1 只要还有失败条目，软件会<strong>主动阻止</strong>进入 Step 2 汇总（避免基于不完整数据下结论），此时点「继续/补跑失败」直到全部成功即可。</li>
+        <li>Step 1 输出的 <code>_AI处理_TEST.xlsx</code> 末尾有一列 <code>_处理状态</code>，可查看每条是否成功。</li>
+      </ul>
+    </div>
+
+    <!-- ==================== 六、销量数据 ==================== -->
+    <h2 id="m2"><span class="module-head"><span class="icon">📊</span><span class="name">六、销量数据</span></span></h2>
+    <p><span class="badge">无需 AI</span> 对从卖家精灵等工具导出的销量 Excel 做清洗、拆分、趋势分析和市场份额统计。</p>
+
+    <h3 id="m2-clean">Tab 1 · 数据清洗</h3>
+    <div class="card">
+      <h4>① 单文件销量拆分</h4>
+      <p>把一个总表按 ASIN/子体拆成规整的时间序列数据。输入 Excel 需包含以下列：</p>
+      <table>
+        <tr><th>必需列</th><th>说明</th></tr>
+        <tr><td>ASIN、父ASIN</td><td>商品标识列</td></tr>
+        <tr><td>月销量、子体销量</td><td>销量数据列</td></tr>
+        <tr><td>月销售额($)、子体销售额($)</td><td>销售额列，货币符号 $ € £ ¥ 均可自动识别</td></tr>
+      </table>
+      <p>输出 <code>_销量拆分.xlsx</code>。<strong>「批量销量拆分」</strong>同理，选一个文件夹即可批量处理里面所有 Excel。</p>
+    </div>
+    <div class="card">
+      <h4>② ASIN 趋势提取</h4>
+      <p>从拆分结果文件夹中，按指定 ASIN 提取某字段的逐月时间序列，一次生成<strong>数据表 + 趋势图</strong>。</p>
+      <ul class="plain">
+        <li><strong>拆分文件夹</strong>：上一步拆分结果所在目录。</li>
+        <li><strong>ASIN 配置</strong>：一个 xlsx / csv / json 文件，列出要查的 ASIN，可带「分组」「标签」列（如把 4 个 ASIN 标为「塔形」组做对比）。</li>
+        <li><strong>提取字段</strong>：默认 <code>子体销量_矫正</code>，可选 子体销售额_矫正 / 月销量 / 月销售额($)，也可手动输入其他列名。</li>
+        <li><strong>分组列</strong>：可选，按颜色、类型等列分组出图。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>③ 数据修正</h4>
+      <p>发现某条数据异常时，直接修正「指定 ASIN + 指定年月」的销量/销额矫正值。年月格式如 <code>2025-03</code>。<strong>保存前会自动生成带时间戳的备份文件</strong>，改错了可以找回。</p>
+    </div>
+
+    <h3 id="m2-cross">Tab 2 · 交叉属性（多条件筛选趋势）</h3>
+    <p>回答这类问题：<em>「白色 + 塔形 的排插，过去一年销量走势如何？」</em>支持 1~5 个筛选条件动态组合。</p>
+    <ol class="steps">
+      <li>选择 Excel，填写<strong>数据 Sheet</strong> 名；「元数据 Sheet」留空默认第一个 Sheet。</li>
+      <li>选择<strong>趋势模式</strong>：销量趋势 / 销额趋势 / 销量&amp;均价趋势（双轴）。选后两者需填写「第二数据 Sheet」（销额表）；均价 = 销额 ÷ 销量。界面下方的提示行会标明当前模式哪些 Sheet 必填。</li>
+      <li>设定筛选条件数，逐条填写 <code>列名=值</code>。一个条件里多个值用英文逗号，如 <code>颜色=白色,黑色</code>；<strong>值留空表示「按这一列分组」</strong>（每个值各出一条线）。</li>
+      <li>点<strong>「生成趋势图」</strong>出图；需要原始数字时点<strong>「导出数据」</strong>（需先填导出路径，且销量、销额两个 Sheet 都要填）。</li>
+    </ol>
+
+    <h3 id="m2-share">Tab 3 · 市场占比</h3>
+    <p>按品牌（或任意列）统计月度市场份额占比趋势，回答「这个类目里 Top 品牌各占多少、此消彼长」。</p>
+    <table>
+      <tr><th style="width:130px">字段</th><th>说明</th></tr>
+      <tr><td>分组列名</td><td>按哪一列统计份额：品牌、线长、颜色、使用场景……都可以</td></tr>
+      <tr><td>展示 Top N</td><td>默认 8，范围 2~20；其余合并为「其他」</td></tr>
+      <tr><td>筛选条件</td><td>可选，格式 <code>列名=值</code>，多个条件用英文分号 <code>;</code> 分隔</td></tr>
+      <tr><td>DPI</td><td>图片清晰度，默认 200，印刷场景可调 300+</td></tr>
+      <tr><td>同时输出占比数据表</td><td>勾选后除图片外再生成一份份额 Excel</td></tr>
+    </table>
+
+    <!-- ==================== 七、自适应图表 ==================== -->
+    <h2 id="m3"><span class="module-head"><span class="icon">📈</span><span class="name">七、自适应图表</span></span></h2>
+    <p><span class="badge">需要 AI</span> 最轻量的出图工具：从 Excel 复制一块数据粘贴进来，AI 自动清洗、聚合、并选出最合适的图型。</p>
+    <ol class="steps">
+      <li>在 Excel 里选中数据区域 <kbd>Ctrl</kbd>+<kbd>C</kbd>，回到软件左侧输入框 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴（制表符、空格、逗号分隔都能识别）。</li>
+      <li>「图表类型」保持 <strong>🤖 自动检测</strong> 即可；有明确偏好时也可指定：柱状图 / 排名条形图 / 饼图 / 折线图 / 100%堆积面积图 / 正负面积堆积图（适合毛利损益类有正有负的数据）。</li>
+      <li>标题留空由 AI 自动生成。</li>
+      <li>点<strong>「🎨 生成图表」</strong>（快捷键 <kbd>Ctrl</kbd>+<kbd>Enter</kbd>），右侧实时预览。</li>
+      <li>点「打开图片」查看大图，「打开输出目录」找到 PNG 文件（默认在软件目录的 <code>图表输出</code> 文件夹）。</li>
+    </ol>
+    <div class="tip">
+      <span class="t">AI 选图规则（自动模式下）</span>
+      分类 ≤8 个 → 饼图；分类 &gt;8 个 → 排名条形图；含日期列 → 折线图；多列数值构成整体 → 100% 堆积面积图；数据有正有负 → 正负面积堆积图。相同分类重复出现会自动求和合并，占比过小的项自动归入「其他」。
+    </div>
+
+    <!-- ==================== 八、产品矩阵 ==================== -->
+    <h2 id="m4"><span class="module-head"><span class="icon">🧩</span><span class="name">八、产品矩阵</span></span></h2>
+    <p><span class="badge">无需 AI</span> 把竞品数据整理成可视化的矩阵 Excel（单元格里直接嵌入商品主图），用于竞品盘点和选品汇报。</p>
+
+    <h3>Tab 1 · 使用场景矩阵</h3>
+    <p>按「使用场景」一列的值分列排布，每个单元格嵌入商品主图 + ASIN + 上架时间。</p>
+    <ul class="plain">
+      <li>源 Excel 的 Sheet 需包含 <code>ASIN</code>、<code>商品主图</code>、<code>上架时间</code> 及分组列。</li>
+      <li>「分组列名」默认 <code>使用场景</code>，可改成其他列；「目标值」逗号分隔，留空 = 全部场景。</li>
+      <li>输出文件需手动指定路径。</li>
+    </ul>
+
+    <h3>Tab 2 · 销额透视矩阵</h3>
+    <p>两个维度交叉透视，例如「三级分类（行）× 插孔布局（列）」，每个单元格显示<strong>销额总和 / ASIN 数 / 平均销额</strong>。销额取值有两种方式（二选一）：</p>
+    <table>
+      <tr><th style="width:170px">方式</th><th>填法</th></tr>
+      <tr><td>方式一：元数据取值</td><td>只填「销额列名」，直接从主表的某一列取销额</td></tr>
+      <tr><td>方式二：子表格月份取值</td><td>填「数据子表格」（如 <code>子体销额</code>）+「月份列」（如 <code>2025-12</code>），从子表指定月份取</td></tr>
+    </table>
+    <p>纵向/横向的「维度值」留空表示全部纳入，也可用筛选条件 <code>列名=值</code> 预过滤。</p>
+
+    <h3>Tab 3 · 品牌×分类矩阵</h3>
+    <p>以品牌为列、分类为行的图片矩阵，适合多品牌横向对比。单元格内嵌主图 + ASIN + 自定义属性。</p>
+    <table>
+      <tr><th style="width:130px">字段</th><th>说明</th></tr>
+      <tr><td>分类列名 / 品牌列名</td><td>默认 <code>三级分类</code> / <code>品牌</code></td></tr>
+      <tr><td>目标品牌</td><td><strong>必填</strong>，逗号分隔，决定矩阵有哪几列</td></tr>
+      <tr><td>图片列 / ASIN 列</td><td>默认 <code>商品主图</code> / <code>ASIN</code></td></tr>
+      <tr><td>属性列</td><td>单元格内追加显示的属性，如 <code>插孔布局,额定功率,价格</code></td></tr>
+      <tr><td>排序列 / 排序方式</td><td>留空按 ASIN 排序；填了排序列后才能选升/降序</td></tr>
+      <tr><td>父ASIN列 + 销量列 + 变体属性列</td><td>三件套用于<strong>变体合并</strong>：同一父体的多个变体只保留销量最高的做代表，并在单元格标注变体差异（如线长、颜色）。不合并则全部留空</td></tr>
+      <tr><td>上架时间列</td><td>填入后自动提取年份做新品汇总</td></tr>
+    </table>
+
+    <!-- ==================== 九、市场规划 ==================== -->
+    <h2 id="m5"><span class="module-head"><span class="icon">🎯</span><span class="name">九、市场规划</span></span></h2>
+
+    <h3>Tab 1 · 字段提取 <span class="badge">需要 AI</span></h3>
+    <p>让 AI 读商品描述文字、看商品主图，把非结构化的 listing 变成结构化字段（如插孔数、线长、材质），是建竞品数据库的第一步。</p>
+    <ol class="steps">
+      <li>选择商品数据 Excel（含商品描述、主图链接等）。</li>
+      <li>选择<strong>产品类目</strong>；类目旁边的 <strong>「+ 添加类目」</strong>可新建类目，<strong>「编辑字段」</strong>打开一个表格对话框，可增删字段并编辑每个字段的「文本提取规则」和「图片提取规则」（即告诉 AI 这个字段该怎么认）。</li>
+      <li>在「提取字段」区勾选本次要提取的字段（全选/全不选可批量操作）。</li>
+      <li>按需勾选<strong>「启用图片识别」</strong>（需要第二章配置视觉模型；关掉则只读文字，速度更快、费用更低）。</li>
+      <li>点<strong>「执行提取」</strong>。每处理 10 行自动保存一次；点「停止」会在当前行完成后保存退出。</li>
+    </ol>
+
+    <h3>Tab 2 · 机会得分 <span class="badge">无需 AI</span></h3>
+    <p>选择一个装着多个细分市场数据 Excel 的文件夹，自动计算每个细分市场的综合机会得分并输出汇总评分表。评分模型：市场体量 30 分、竞争结构 20 分、价格环境 15 分、新品成长机会 25 分、门槛与热度 10 分。</p>
+
+    <h3>Tab 3 · 类目筛选 <span class="badge">需要 AI</span></h3>
+    <p>面对成百上千个候选类目，AI 结合公司产品线简介（连接类/墙装类/控制类/能控类/庭院户外类）逐个判断相关性，初筛掉不相关或不可进入的类目。每批 20 个、每 5 批存一次断点，大列表中途中断也不丢进度。</p>
+
+    <h3>Tab 4 · 数据进度 <span class="badge">无需 AI</span></h3>
+    <p>数据采集（爬虫）配套工具：选择「全部 ID 列表」txt 文件和已爬取文件所在目录，软件比对后输出各品类完成百分比，并生成 <code>missing_ids.txt</code>（还没爬的 ID 清单）。默认按 <code>.png</code> 文件名匹配，可在「文件扩展名」修改。</p>
+
+    <!-- ==================== 十、数据格式汇总 ==================== -->
+    <h2 id="data-format">十、数据格式要求汇总</h2>
+    <table>
+      <tr><th style="width:150px">功能</th><th>输入</th><th>关键要求</th></tr>
+      <tr><td>评论分析 / TEST</td><td>评论 Excel</td><td>按星级分 Sheet（如 5 star）；评论正文在「内容」列</td></tr>
+      <tr><td>销量拆分</td><td>销量 Excel</td><td>需含 ASIN、父ASIN、月销量、子体销量、月销售额($)、子体销售额($)</td></tr>
+      <tr><td>ASIN 趋势提取</td><td>拆分结果文件夹 + ASIN 配置文件</td><td>配置文件为 xlsx/csv/json，含 ASIN 列，可带分组、标签列</td></tr>
+      <tr><td>交叉属性 / 市场占比</td><td>销量 Excel</td><td>需指定元数据 Sheet（留空默认第一个）和数据 Sheet 名称</td></tr>
+      <tr><td>自适应图表</td><td>剪贴板粘贴的表格</td><td>任意分隔符；含表头行效果更好</td></tr>
+      <tr><td>使用场景矩阵</td><td>竞品 Excel</td><td>含 ASIN、商品主图、上架时间列；主图需为可下载的图片链接</td></tr>
+      <tr><td>字段提取</td><td>商品数据 Excel</td><td>含商品描述等文本；启用图片识别时主图需为图片链接</td></tr>
+      <tr><td>数据进度</td><td>全部 ID 的 txt + 已爬取目录</td><td>txt 每行一个 ID；已爬取文件名 = ID + 扩展名</td></tr>
+    </table>
+    <div class="tip">
+      <span class="t">通用约定</span>
+      ① 输出路径留空 = 自动在输入文件旁生成；② 多值输入一律用英文逗号；③ 筛选条件统一格式 <code>列名=值</code>，多个条件用英文分号；④ 年月格式统一 <code>2025-03</code>。
+    </div>
+
+    <!-- ==================== 十一、更新 ==================== -->
+    <h2 id="update">十一、软件更新</h2>
+    <ol class="steps">
+      <li>如果管理员配置了更新源，软件启动时会自动检查新版本，发现后弹窗提示，点「是」开始下载。</li>
+      <li>下载完成并校验通过后，再次确认，软件自动关闭并由 <code>PM Stack Updater.exe</code> 完成替换、重启，全程无需手动操作。</li>
+      <li>旧版本会自动保留为 <code>PM Stack.previous.exe</code>，万一新版本有问题可以改回文件名恢复；确认新版本稳定后可手动删除它。</li>
+      <li>更新日志记录在 <code>%LOCALAPPDATA%\PM Stack\updater.log</code>。</li>
+    </ol>
+    <div class="warn">
+      <span class="t">如果更新失败</span>
+      程序会自动回滚到旧版本。反复失败请联系管理员，直接领取最新完整压缩包覆盖安装即可（个人配置在系统目录，不受影响）。
+    </div>
+
+    <!-- ==================== 十二、FAQ ==================== -->
+    <h2 id="faq">十二、常见问题 FAQ</h2>
+
+    <div class="card">
+      <h4>Q1：双击后 Windows 提示「已保护你的电脑」？</h4>
+      <p>软件未购买代码签名证书导致的正常提示，点「更多信息 → 仍要运行」。如被杀毒软件拦截，请选择信任/添加白名单。</p>
+    </div>
+    <div class="card">
+      <h4>Q2：AI 功能报错「未配置 API」「API Key 无效」？</h4>
+      <p>打开设置检查三项：API Key 是否填了 <code>sk-</code> 开头的完整密钥；Base URL 是否为 <code>https://api.siliconflow.cn/v1</code>；硅基流动账户是否还有余额。Key 有效但提示连接失败时，检查公司网络是否限制了外网 API 访问。</p>
+    </div>
+    <div class="card">
+      <h4>Q3：评论分析跑到一半断了 / 失败了怎么办？</h4>
+      <p>原「评论分析」模块需要重跑；「评论分析 TEST」直接点「继续/补跑失败」即可从断点续跑，已成功条目不会重复扣费。这也是推荐大家优先使用 TEST 模块的原因之一。</p>
+    </div>
+    <div class="card">
+      <h4>Q4：日志里出现 429 是什么意思？</h4>
+      <p>表示触发了 AI 服务商的限流（每分钟请求数/Token 数超上限）。TEST 模块会自动等待重试，一般无需干预；频繁出现就把并发数从 8 降到 4。</p>
+    </div>
+    <div class="card">
+      <h4>Q5：提示「数据源缺少以下列」？</h4>
+      <p>输入 Excel 的列名和软件约定不一致。对照第十章的格式要求检查列名（注意中英文、括号、货币符号），从导数工具导出后不要手动改列名。</p>
+    </div>
+    <div class="card">
+      <h4>Q6：矩阵 Excel 里图片显示不出来？</h4>
+      <p>商品主图必须是可公开访问的图片链接（http/https），本地图片路径无效。另外请联网生成矩阵，图片是生成时实时下载嵌入的。</p>
+    </div>
+    <div class="card">
+      <h4>Q7：点按钮没反应？</h4>
+      <p>看一眼下方日志区：多数情况是缺少必填项或「当前有任务正在运行」。日志区的红色文字会明确告诉你缺什么。</p>
+    </div>
+    <div class="card">
+      <h4>Q8：我的 API Key 安全吗？会被别人看到吗？</h4>
+      <p>Key 经 Windows DPAPI 加密后只存在你自己电脑的系统目录，软件界面只显示圆点，任何导出的文件中都不会包含 Key。</p>
+    </div>
+    <div class="card">
+      <h4>Q9：处理结果文件在哪里？</h4>
+      <p>绝大多数功能默认把结果放在<strong>输入文件旁边</strong>，文件名带约定后缀（<code>_AI处理</code>、<code>_AI总结</code>、<code>_AI全流程</code>、<code>_销量拆分</code> 等）；自适应图表的图片在软件目录的 <code>图表输出</code> 文件夹。</p>
+    </div>
+    <div class="card">
+      <h4>Q10：想要新品类模板 / 新提取字段 / 新功能？</h4>
+      <p>品类评论模板和字段提取规则都可以自定义：评论分析页支持导入/导出品类 JSON 配置；市场规划的字段提取支持在界面里直接「+ 添加类目」「编辑字段」。复杂需求请联系管理员。</p>
+    </div>
+
+    <div class="footer">
+      PM Stack V1.10.2 使用说明书 · 2026-08-31 · 本文档为单机离线文件，双击即可用浏览器打开，可直接打印或另存为 PDF。
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
