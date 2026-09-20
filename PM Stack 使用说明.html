@@ -426,13 +426,16 @@
       <p>输出 <code>_销量拆分.xlsx</code>。<strong>「批量销量拆分」</strong>同理，选一个文件夹即可批量处理里面所有 Excel。</p>
     </div>
     <div class="card">
-      <h4>② ASIN 趋势提取</h4>
-      <p>从拆分结果文件夹中，按指定 ASIN 提取某字段的逐月时间序列，一次生成<strong>数据表 + 趋势图</strong>。</p>
+      <h4>② ASIN 历史趋势</h4>
+      <p>在独立的「ASIN趋势」页中，把输入的 ASIN 作为筛选结果，合并历史拆分文件夹与可选的第二数据来源 Excel 后生成趋势；这些 ASIN 不需要同时存在于两个来源中。后续的聚合、图表和数据导出格式与「交叉属性」一致。</p>
       <ul class="plain">
-        <li><strong>拆分文件夹</strong>：上一步拆分结果所在目录。</li>
-        <li><strong>ASIN 配置</strong>：一个 xlsx / csv / json 文件，列出要查的 ASIN，可带「分组」「标签」列（如把 4 个 ASIN 标为「塔形」组做对比）。</li>
-        <li><strong>提取字段</strong>：默认 <code>子体销量_矫正</code>，可选 子体销售额_矫正 / 月销量 / 月销售额($)，也可手动输入其他列名。</li>
-        <li><strong>分组列</strong>：可选，按颜色、类型等列分组出图。</li>
+        <li><strong>历史数据文件夹</strong>：包含逐月 <code>*_销量拆分.xlsx</code> 文件的目录。</li>
+        <li><strong>第二数据来源</strong>：可选的 Excel 文件；填写其中的销量数据 Sheet 和销额数据 Sheet，结构与交叉属性使用的历史 Sheet 相同（行是 ASIN，列是月份）。两个来源月份重叠时以第二来源的非空值为准。</li>
+        <li><strong>ASIN 列表</strong>：直接粘贴一个或多个 ASIN，支持逗号、空格或换行分隔。</li>
+        <li><strong>销量字段 / 销额字段</strong>：默认使用 <code>子体销量_矫正</code> 和 <code>子体销售额_矫正</code>，也可选择或手动填写其他列名。</li>
+        <li><strong>趋势模式</strong>：支持销量趋势、销额趋势、销量&amp;均价趋势；均价按所选 ASIN 的销额合计 ÷ 销量合计计算。</li>
+        <li><strong>生成趋势图 / 导出数据</strong>：两个按钮独立使用。导出的每个 ASIN 占三行，分别是销量、销额、均价，与交叉属性导出格式一致。</li>
+        <li><strong>默认输出</strong>：保存到历史数据文件夹同级的「规划」目录，按 ASIN 值组合命名。</li>
       </ul>
     </div>
     <div class="card">
@@ -441,11 +444,12 @@
     </div>
 
     <h3 id="m2-cross">Tab 2 · 交叉属性（多条件筛选趋势）</h3>
-    <p>回答这类问题：<em>「白色 + 塔形 的排插，过去一年销量走势如何？」</em>支持 1~5 个筛选条件动态组合。</p>
+    <p>回答这类问题：<em>「白色 + 塔形 的排插，过去一年销量走势如何？」</em>最多支持 10 个筛选条件动态组合。</p>
     <ol class="steps">
       <li>选择 Excel，填写<strong>数据 Sheet</strong> 名；「元数据 Sheet」留空默认第一个 Sheet。</li>
       <li>选择<strong>趋势模式</strong>：销量趋势 / 销额趋势 / 销量&amp;均价趋势（双轴）。选后两者需填写「第二数据 Sheet」（销额表）；均价 = 销额 ÷ 销量。界面下方的提示行会标明当前模式哪些 Sheet 必填。</li>
       <li>设定筛选条件数，逐条填写 <code>列名=值</code>。一个条件里多个值用英文逗号，如 <code>颜色=白色,黑色</code>；<strong>值留空表示「按这一列分组」</strong>（每个值各出一条线）。</li>
+      <li>输出路径留空时，文件名由筛选值和分组字段组成，例如 <code>普通排插_三角形_US插口数.png</code>。</li>
       <li>点<strong>「生成趋势图」</strong>出图；需要原始数字时点<strong>「导出数据」</strong>（需先填导出路径，且销量、销额两个 Sheet 都要填）。</li>
     </ol>
 
@@ -537,7 +541,7 @@
       <tr><th style="width:150px">功能</th><th>输入</th><th>关键要求</th></tr>
       <tr><td>评论分析 / TEST</td><td>评论 Excel</td><td>按星级分 Sheet（如 5 star）；评论正文在「内容」列</td></tr>
       <tr><td>销量拆分</td><td>销量 Excel</td><td>需含 ASIN、父ASIN、月销量、子体销量、月销售额($)、子体销售额($)</td></tr>
-      <tr><td>ASIN 趋势提取</td><td>拆分结果文件夹 + ASIN 配置文件</td><td>配置文件为 xlsx/csv/json，含 ASIN 列，可带分组、标签列</td></tr>
+      <tr><td>ASIN 历史趋势</td><td>历史拆分文件夹 + 可选第二来源 Excel</td><td>第二来源需指定销量与销额 Sheet，两个来源按 ASIN、月份合并</td></tr>
       <tr><td>交叉属性 / 市场占比</td><td>销量 Excel</td><td>需指定元数据 Sheet（留空默认第一个）和数据 Sheet 名称</td></tr>
       <tr><td>自适应图表</td><td>剪贴板粘贴的表格</td><td>任意分隔符；含表头行效果更好</td></tr>
       <tr><td>使用场景矩阵</td><td>竞品 Excel</td><td>含 ASIN、商品主图、上架时间列；主图需为可下载的图片链接</td></tr>

@@ -67,8 +67,14 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='ASIN数据提取与趋势分析 — 从销量拆分文件中按ASIN提取时间序列'
     )
-    parser.add_argument('--folder', required=True,
+    parser.add_argument('--folder', default='',
                         help='包含 *_销量拆分.xlsx 文件的文件夹路径')
+    parser.add_argument('--second-file', default='',
+                        help='第二数据来源 Excel 文件（ASIN×月份宽表）')
+    parser.add_argument('--volume-sheet', default='',
+                        help='第二数据来源中的销量历史 Sheet')
+    parser.add_argument('--revenue-sheet', default='',
+                        help='第二数据来源中的销额历史 Sheet')
     parser.add_argument('--asins', default='',
                         help='要查询的ASIN，逗号分隔')
     parser.add_argument('--groups', default='',
@@ -76,11 +82,22 @@ def parse_args():
     parser.add_argument('--config', default='',
                         help='CSV/JSON配置文件路径 (含 ASIN,分组,标签 列)，替代 --asins')
     parser.add_argument('--field', default='子体销量_矫正',
-                        help='要提取的数据列名 (默认: 子体销量_矫正)')
+                        help='旧版单字段输出所用列名 (默认: 子体销量_矫正)')
+    parser.add_argument('--mode', default='legacy',
+                        choices=['legacy', 'volume', 'revenue', 'volume-price'],
+                        help='输出模式: 销量 / 销额 / 销量与均价双轴')
+    parser.add_argument('--volume-field', default='子体销量_矫正',
+                        help='销量字段名 (默认: 子体销量_矫正)')
+    parser.add_argument('--revenue-field', default='子体销售额_矫正',
+                        help='销额字段名 (默认: 子体销售额_矫正)')
     parser.add_argument('--output', default='',
                         help='输出xlsx路径 (默认: asin_trend_{field}.xlsx)')
     parser.add_argument('--chart', default='',
                         help='输出图表路径 (默认: asin_trend_{field}.png)')
+    parser.add_argument('--export-data', default='',
+                        help='按交叉属性格式导出销量/销额/均价明细')
+    parser.add_argument('--export-only', action='store_true',
+                        help='只导出明细数据，不生成图片')
     parser.add_argument('--show', action='store_true',
                         help='显示图表窗口 (非交互环境请勿使用)')
     parser.add_argument('--no-table', action='store_true',
@@ -370,6 +387,113 @@ def extract_data(folder, records, field):
     return df_wide, warnings
 
 
+def extract_excel_sheet(file_path, sheet_name, records):
+    """从第二数据来源的 ASIN×月份 Sheet 提取所选 ASIN。"""
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"第二数据来源不存在: {file_path}")
+    if not sheet_name:
+        raise ValueError("第二数据来源未填写 Sheet 名称")
+
+    xls = pd.ExcelFile(file_path)
+    try:
+        if sheet_name not in xls.sheet_names:
+            raise ValueError(
+                f"第二数据来源中不存在 Sheet「{sheet_name}」。"
+                f"可用: {', '.join(xls.sheet_names)}")
+        df = pd.read_excel(xls, sheet_name=sheet_name)
+    finally:
+        xls.close()
+
+    if 'ASIN' not in df.columns:
+        raise ValueError(
+            f"第二数据来源 Sheet「{sheet_name}」中没有 ASIN 列。"
+            f"可用列: {', '.join(str(c) for c in df.columns)}")
+
+    asin_to_label = {
+        str(asin).strip().upper(): label for asin, _, label in records
+    }
+    df['ASIN'] = df['ASIN'].astype(str).str.strip().str.upper()
+    df = df[df['ASIN'].isin(asin_to_label)].copy()
+    if df.empty:
+        raise RuntimeError(f"第二数据来源 Sheet「{sheet_name}」未找到所选 ASIN")
+
+    value_columns = [
+        c for c in df.columns
+        if re.fullmatch(r'\d{4}-\d{2}', normalize_month_label(c))
+    ]
+    if not value_columns:
+        raise ValueError(f"第二数据来源 Sheet「{sheet_name}」中没有月份数据列")
+    for column in value_columns:
+        df[column] = pd.to_numeric(df[column], errors='coerce')
+
+    # 同一 ASIN 若出现多行，按交叉属性的总量逻辑合并。
+    wide = df.set_index('ASIN')[value_columns].groupby(level=0).sum(min_count=1)
+    wide = wide.rename(index=asin_to_label)
+    result = wide.T
+    result.index = [normalize_month_label(value) for value in result.index]
+    result = result.groupby(level=0).sum(min_count=1)
+    result.index.name = '年月'
+    return result.sort_index()
+
+
+def normalize_month_label(value):
+    """把 Excel 日期或月份标题统一为 YYYY-MM（无法识别时保留原值）。"""
+    if isinstance(value, pd.Timestamp):
+        return value.strftime('%Y-%m')
+    text = str(value).strip()
+    match = re.search(r'(\d{4})[-./年](\d{1,2})', text)
+    if match:
+        return f"{match.group(1)}-{int(match.group(2)):02d}"
+    match = re.fullmatch(r'(\d{4})(\d{2})', text)
+    if match and 1 <= int(match.group(2)) <= 12:
+        return f"{match.group(1)}-{match.group(2)}"
+    return text
+
+
+def merge_source_frames(folder_df, second_df):
+    """合并两个来源；相同 ASIN、月份以第二数据来源的非空值为准。"""
+    if folder_df is None:
+        return second_df
+    if second_df is None:
+        return folder_df
+    merged = second_df.combine_first(folder_df)
+    merged.index = [normalize_month_label(value) for value in merged.index]
+    return merged.sort_index()
+
+
+def extract_source_data(args, records, field, sheet_name, source_label):
+    """提取并合并历史文件夹与第二数据来源中的一个指标。"""
+    folder_df = second_df = None
+    warnings = []
+
+    if args.folder:
+        try:
+            folder_df, current_warnings = extract_data(args.folder, records, field)
+            # 单一来源的缺失情况在合并完成后统一判断，避免第二来源已补齐仍误报。
+            warnings.extend(
+                warning for warning in current_warnings
+                if not warning.startswith('以下 ') and '在所有文件中均未找到' not in warning
+            )
+        except RuntimeError as exc:
+            warnings.append(f"历史数据文件夹未提供{source_label}: {exc}")
+
+    if args.second_file:
+        try:
+            second_df = extract_excel_sheet(args.second_file, sheet_name, records)
+        except RuntimeError as exc:
+            warnings.append(str(exc))
+
+    merged = merge_source_frames(folder_df, second_df)
+    if merged is None or merged.empty:
+        raise RuntimeError(f"两个数据来源都没有可用的{source_label}数据")
+
+    if folder_df is not None and second_df is not None:
+        overlap_months = len(set(folder_df.index) & set(second_df.index))
+        print(f"  {source_label}来源已合并；重叠月份 {overlap_months} 个，"
+              "以第二数据来源为准")
+    return merged, warnings
+
+
 # ============================================================
 # 输出表格
 # ============================================================
@@ -646,11 +770,148 @@ def make_chart(df, field, records, output_path=None, show=False, dpi=200):
 
 
 # ============================================================
+# 与交叉属性一致的输出
+# ============================================================
+
+def _aligned_groups(records, available_labels):
+    """把所选 ASIN 转为交叉属性图表使用的分组结构。"""
+    available = set(available_labels)
+    has_groups = any(str(group).strip() for _, group, _ in records)
+    groups = defaultdict(list)
+    for asin, group, label in records:
+        if label not in available:
+            continue
+        if has_groups:
+            group_name = str(group).strip() or '未分组'
+        else:
+            group_name = '全部ASIN'
+        groups[group_name].append(label)
+    return dict(groups), has_groups
+
+
+def _attribute_frame(df):
+    """年月×ASIN 转为交叉属性模块使用的 ASIN×年月格式。"""
+    result = df.T.copy()
+    result.index.name = 'ASIN'
+    result.columns = [str(col) for col in result.columns]
+    return result
+
+
+def _print_warnings(warnings):
+    if not warnings:
+        return
+    unique = list(dict.fromkeys(warnings))
+    print(f"\n  警告 ({len(unique)}):")
+    for warning in unique[:10]:
+        print(f"    - {warning}")
+    if len(unique) > 10:
+        print(f"    ... 共 {len(unique)} 条")
+
+
+def run_aligned_output(args, records):
+    """按交叉属性模块的聚合、图表和明细格式输出 ASIN 历史趋势。"""
+    from trend_by_attribute import (
+        setup_font as setup_attribute_font,
+        make_chart as make_attribute_chart,
+        make_dual_chart,
+        export_detail_data,
+    )
+
+    need_volume = args.mode in ('volume', 'volume-price') or bool(args.export_data)
+    need_revenue = args.mode in ('revenue', 'volume-price') or bool(args.export_data)
+    volume_df = revenue_df = None
+    warnings = []
+
+    if need_volume:
+        print(f"\n  提取销量字段: {args.volume_field}")
+        volume_df, current_warnings = extract_source_data(
+            args, records, args.volume_field, args.volume_sheet, '销量')
+        warnings.extend(current_warnings)
+    if need_revenue:
+        print(f"\n  提取销额字段: {args.revenue_field}")
+        revenue_df, current_warnings = extract_source_data(
+            args, records, args.revenue_field, args.revenue_sheet, '销额')
+        warnings.extend(current_warnings)
+    if volume_df is not None and revenue_df is not None:
+        months = sorted(set(volume_df.index) | set(revenue_df.index))
+        volume_df = volume_df.reindex(months)
+        revenue_df = revenue_df.reindex(months)
+
+    primary_df = volume_df if volume_df is not None else revenue_df
+    missing_asins = [
+        asin for asin, _, label in records if label not in primary_df.columns
+    ]
+    if missing_asins:
+        warnings.append(
+            f"以下 {len(missing_asins)} 个ASIN在两个数据来源中均未找到: "
+            f"{', '.join(missing_asins[:10])}"
+            f"{'...' if len(missing_asins) > 10 else ''}")
+    _print_warnings(warnings)
+    groups, has_groups = _aligned_groups(records, primary_df.columns)
+    if not groups:
+        raise RuntimeError("所选 ASIN 没有可用于输出的历史数据")
+
+    group_col = args.group_col if has_groups else ''
+    volume_attr = _attribute_frame(volume_df) if volume_df is not None else None
+    revenue_attr = _attribute_frame(revenue_df) if revenue_df is not None else None
+    print(f"\n  结果: {len(primary_df)} 个月 × {len(primary_df.columns)} 个ASIN")
+    print(f"  时间跨度: {primary_df.index[0]} ~ {primary_df.index[-1]}")
+    if has_groups:
+        print(f"  分组数: {len(groups)}")
+
+    if args.export_data:
+        if volume_attr is None or revenue_attr is None:
+            raise RuntimeError("导出数据需要同时提供销量字段和销额字段")
+        export_dir = os.path.dirname(os.path.abspath(args.export_data))
+        os.makedirs(export_dir, exist_ok=True)
+        export_detail_data(
+            groups, volume_attr, revenue_attr, group_col, [], args.export_data)
+
+    if args.export_only:
+        return
+
+    chart_path = args.chart
+    if not chart_path:
+        suffix = {
+            'volume': '销量趋势',
+            'revenue': '销额趋势',
+            'volume-price': '销量与均价趋势',
+        }.get(args.mode, '趋势')
+        chart_path = f"asin_{suffix}.png"
+    chart_dir = os.path.dirname(os.path.abspath(chart_path))
+    os.makedirs(chart_dir, exist_ok=True)
+    font_name = setup_attribute_font()
+
+    if args.mode == 'volume':
+        make_attribute_chart(
+            groups, volume_attr, group_col, 'sum', 3, chart_path,
+            args.dpi, args.show, font_name, filter_exprs=[],
+            data_label=args.volume_field)
+    elif args.mode == 'revenue':
+        make_attribute_chart(
+            groups, revenue_attr, group_col, 'sum', 3, chart_path,
+            args.dpi, args.show, font_name, filter_exprs=[],
+            data_label=args.revenue_field)
+    elif args.mode == 'volume-price':
+        make_dual_chart(
+            groups, volume_attr, revenue_attr, group_col, 'sum', 3,
+            chart_path, args.dpi, args.show, font_name,
+            label_1=args.volume_field, label_2=args.revenue_field,
+            filter_exprs=[], avg_price_only=True)
+    else:
+        raise RuntimeError(f"不支持的输出模式: {args.mode}")
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
 def main():
     args = parse_args()
+
+    if not args.folder and not args.second_file:
+        print("错误: 请至少指定 --folder 或 --second-file 其中一个数据来源")
+        sys.exit(1)
 
     # 1. 加载ASIN配置
     records = load_asin_config(args)
@@ -659,8 +920,12 @@ def main():
     print("=" * 60)
     print("  ASIN 数据提取 & 趋势分析")
     print("=" * 60)
-    print(f"  文件夹: {args.folder}")
-    print(f"  字段:   {args.field}")
+    if args.folder:
+        print(f"  历史文件夹: {args.folder}")
+    if args.second_file:
+        print(f"  第二来源:   {args.second_file}")
+    if args.mode == 'legacy':
+        print(f"  字段:   {args.field}")
     print(f"  ASIN数: {len(records)}")
 
     groups = set(r[1] for r in records if r[1])
@@ -669,6 +934,28 @@ def main():
         for grp in sorted(groups):
             members = [r[0] for r in records if r[1] == grp]
             print(f"    {grp} ({len(members)}个): {', '.join(members[:5])}{'...' if len(members) > 5 else ''}")
+
+    if args.mode != 'legacy' or args.export_data:
+        mode_labels = {
+            'volume': '销量趋势',
+            'revenue': '销额趋势',
+            'volume-price': '销量&均价趋势',
+            'legacy': '明细数据导出',
+        }
+        print(f"  输出模式: {mode_labels.get(args.mode, args.mode)}")
+        if args.folder:
+            print(f"\n  扫描历史数据文件夹...")
+            entries = scan_files(args.folder)
+            print(f"  找到 {len(entries)} 个拆分文件 "
+                  f"({entries[0][1] if entries else 'N/A'} ~ "
+                  f"{entries[-1][1] if entries else 'N/A'})")
+        if args.second_file:
+            print("  已启用第二数据来源 Excel")
+        run_aligned_output(args, records)
+        print(f"\n{'=' * 60}")
+        print("  完成")
+        print(f"{'=' * 60}")
+        return
 
     # 2. 扫描文件并提取数据
     print(f"\n  扫描文件...")
@@ -693,6 +980,9 @@ def main():
     # 3. 输出表格
     if not args.no_table:
         output_xlsx = args.output or f"asin_trend_{args.field}.xlsx"
+        output_dir = os.path.dirname(os.path.abspath(output_xlsx))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         save_table(df, args.field, records, output_xlsx)
     else:
         print("  已跳过表格生成 (--no-table)")
@@ -702,6 +992,9 @@ def main():
         print("  已跳过图表生成 (--no-chart)")
     elif len(df) > 1:
         output_chart = args.chart or f"asin_trend_{args.field}.png"
+        chart_dir = os.path.dirname(os.path.abspath(output_chart))
+        if chart_dir:
+            os.makedirs(chart_dir, exist_ok=True)
         make_chart(df, args.field, records,
                    output_path=output_chart, show=args.show, dpi=args.dpi)
     else:

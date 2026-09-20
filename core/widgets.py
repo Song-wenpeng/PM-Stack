@@ -212,6 +212,8 @@ def configure_combo(combo, max_visible=8):
     combo.setMaxVisibleItems(max_visible)
     combo.setSizeAdjustPolicy(
         QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    # 未设置时默认为 0，下拉框会塌缩到只剩箭头区域
+    combo.setMinimumContentsLength(14)
     view = combo.view()
     view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     view.setMouseTracking(True)

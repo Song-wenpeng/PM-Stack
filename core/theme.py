@@ -9,6 +9,8 @@
 """
 
 from PyQt6.QtCore import QObject, pyqtSignal
+import os
+import tempfile
 
 
 # ============================================================
@@ -140,7 +142,44 @@ THEME = ThemeManager()
 # QSS 生成
 # ============================================================
 
+def _ensure_check_icons(accent: str, box_bg: str) -> str:
+    """生成勾选图标 PNG（圆角框 + 强调色√），返回文件路径供 QSS 引用。"""
+    from PyQt6.QtGui import QImage, QPainter, QPen, QColor
+    from PyQt6.QtCore import Qt, QPointF
+
+    cache_dir = os.path.join(tempfile.gettempdir(), "pm_stack_theme")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(
+        cache_dir, f"check_{accent.lstrip('#')}_{box_bg.lstrip('#')}.png")
+    if os.path.exists(path):
+        return path
+
+    size = 32  # 2x 超采样，抗锯齿更平滑
+    img = QImage(size, size, QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    # 圆角底 + 强调色描边
+    p.setPen(QPen(QColor(accent), 2.5))
+    p.setBrush(QColor(box_bg))
+    p.drawRoundedRect(2, 2, size - 4, size - 4, 7, 7)
+    # 勾选符号
+    p.setPen(QPen(QColor(accent), 3.5, Qt.PenStyle.SolidLine,
+                  Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    from PyQt6.QtGui import QPainterPath
+    path_obj = QPainterPath()
+    path_obj.moveTo(QPointF(9, 17))
+    path_obj.lineTo(QPointF(14, 22))
+    path_obj.lineTo(QPointF(23, 11))
+    p.drawPath(path_obj)
+    p.end()
+    img.save(path, "PNG")
+    return path
+
+
 def build_qss(t):
+    check_icon = _ensure_check_icons(t["accent"], t["input"]).replace("\\", "/")
     return f"""
 /* ===== 全局 ===== */
 QWidget {{
@@ -317,6 +356,8 @@ QLineEdit::placeholder {{ color: {t['text3']}; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{
     image: none;
+    width: 0;
+    height: 0;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
     border-top: 6px solid {t['text3']};
@@ -340,12 +381,16 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {{
 }}
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
     image: none;
+    width: 0;
+    height: 0;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
     border-bottom: 5px solid {t['text2']};
 }}
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
     image: none;
+    width: 0;
+    height: 0;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
     border-top: 5px solid {t['text2']};
@@ -452,8 +497,9 @@ QCheckBox::indicator {{
     background-color: {t['input']};
 }}
 QCheckBox::indicator:checked {{
-    background-color: {t['accent']};
-    border-color: {t['accent']};
+    image: url({check_icon});
+    border: none;
+    background-color: transparent;
 }}
 
 /* ===== 提示文字 ===== */

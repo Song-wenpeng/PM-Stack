@@ -6,6 +6,7 @@
 - **窄图标导航栏**：悬停显示功能说明，`Ctrl+1~5` 快速切换模块
 - **文件拖拽**：所有路径输入框支持从资源管理器直接拖入文件/文件夹
 - **插件化架构**：`modules/` 目录下新增模块文件（含 `MODULE_INFO` + `ModuleWidget`）即自动加载，也支持 `plugins/modules/` 外部插件
+- **评论采集与云端**：评论分析内置 Amazon 评论采集、SQLite 离线缓存、Supabase 同步、评论库查询，以及一键发送到 AI 分析
 
 ---
 
@@ -14,6 +15,12 @@
 ### 1. 评论分析（modules/comment_analysis.py）
 
 对评论 Excel 做 AI 特征提取与归类汇总，依赖设置中的 LLM API。
+
+「采集与云端」子模块通过系统 Microsoft Edge 采集 Amazon 评论，标准化后先写入
+`%LOCALAPPDATA%\PM Stack\reviews\data\reviews.db`，再由可靠 outbox 同步至
+Supabase。评论库支持筛选、中文字段 Excel 导出，以及把结果直接送入“一键完成分析”。
+首次使用云端前，需要按文件名顺序执行 `core/reviews/migrations/` 中的 SQL；桌面端
+只允许填写 publishable/anon key，不能使用 `service_role` key。
 
 | 子功能 | 说明 | 对应脚本 |
 |---|---|---|
@@ -35,9 +42,9 @@
 |---|---|---|
 | 数据清洗 - 单文件拆分 | 单 Excel 按 ASIN/子体拆分销量 | `scripts/sales_number.py` |
 | 数据清洗 - 批量拆分 | 文件夹内所有 Excel 批量拆分 | `scripts/batch_sales_split.py` |
-| 数据清洗 - ASIN 趋势提取 | 按 ASIN 提取指定字段时间序列，生成数据表+趋势图 | `scripts/extract_asin_trend.py` |
+| ASIN 趋势 | 直接输入多个 ASIN，合并历史拆分文件夹与可选的第二数据来源 Excel，生成销量、销额或销量&均价双轴趋势；图表与明细导出格式和交叉属性一致 | `scripts/extract_asin_trend.py` |
 | 数据清洗 - 数据修正 | 修正指定 ASIN+年月的销量/销额矫正值 | `scripts/fix_sales_data.py` |
-| 交叉属性 | 1-5 个筛选条件动态组合（支持多值 `列名=值1,值2`），销量/销额/销量&均价双轴趋势图，可导出数据 | `scripts/trend_by_attribute.py` |
+| 交叉属性 | 最多 10 个筛选条件动态组合（支持多值 `列名=值1,值2`），销量/销额/销量&均价双轴趋势图，可导出数据；默认按筛选值+分组字段命名 | `scripts/trend_by_attribute.py` |
 | 市场占比 | 按品牌/类别统计月度份额占比趋势，Top N 展示，可导出份额表 | `scripts/brand_share_trend.py` |
 
 > 交叉属性/市场占比的「元数据Sheet」留空时默认使用 Excel 的第一个 Sheet。
@@ -150,3 +157,11 @@ update-channel.json
 - `scripts/figure_display.py` — 图表展示工具
 - `scripts/review_visual_dashboard_ai.py` — 评论可视化看板（实验性）
 - `scripts/comments_step_1&2.py` — 评论分析两步合并版（备用）
+
+### 评论采集运行环境
+
+评论采集与 EXE 打包使用 Python 3.12+。双击 `start-pm-stack.bat` 使用主项目独立的 `.venv-review` 环境；首次安装也可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup_review_env.ps1`。不使用旧 `.venv` 或系统默认 Python 3.8。
+
+独立构建：执行 `tools/build_review_fix.ps1`，产物为 `.runtime-local/dist/PM Stack.exe`，不会发布或替换已有发布包。已打包的旧 EXE 不会随源代码修改而更新。
+
+Amazon 评论页可能要求登录；请在采集器打开的 Edge 内完成登录或验证码。同一采集浏览器目录不能被多个采集实例同时使用。浏览器启动错误会保留原始原因，清理或失败记录异常另行提示。

@@ -33,6 +33,8 @@
 import os
 import sys
 import argparse
+import re
+from datetime import date, datetime
 
 if sys.platform == 'win32':
     try:
@@ -152,6 +154,53 @@ def fmt_y(v, _):
 # 数据读取
 # ============================================================
 
+def normalize_month_header(value):
+    """识别并统一真正的年月列；无表头列及普通字段返回 None。"""
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return pd.Timestamp(value).strftime('%Y-%m')
+    text = str(value).strip()
+    if not text or text.lower().startswith('unnamed:'):
+        return None
+    match = re.fullmatch(r'(\d{4})[-./年](\d{1,2})月?', text)
+    if not match:
+        match = re.fullmatch(r'(\d{4})(\d{2})', text)
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    if not 2000 <= year <= 2100 or not 1 <= month <= 12:
+        return None
+    return f'{year:04d}-{month:02d}'
+
+
+def keep_month_columns(df_data, sheet_name):
+    """只保留 YYYY-MM 月份列，避免 Unnamed 空表头被画入横坐标。"""
+    month_columns = []
+    normalized = []
+    ignored = []
+    for column in df_data.columns:
+        month = normalize_month_header(column)
+        if month:
+            month_columns.append(column)
+            normalized.append(month)
+        else:
+            ignored.append(str(column))
+
+    if not month_columns:
+        print(f"错误: 历史数据 Sheet「{sheet_name}」中没有可识别的年月列（如 2025-01）")
+        sys.exit(1)
+    if ignored:
+        preview = ', '.join(ignored[:6])
+        suffix = '...' if len(ignored) > 6 else ''
+        print(f"  已忽略 {len(ignored)} 个非月份列: {preview}{suffix}")
+
+    result = df_data.loc[:, month_columns].copy()
+    result.columns = normalized
+    for column in result.columns:
+        result[column] = pd.to_numeric(result[column], errors='coerce')
+    if result.columns.duplicated().any():
+        result = result.T.groupby(level=0).sum(min_count=1).T
+    return result.reindex(sorted(result.columns), axis=1)
+
 def load_data(file_path, meta_sheet, data_sheet, group_col, filter_exprs):
     """读取元数据和历史数据，返回分组结果。
 
@@ -181,10 +230,7 @@ def load_data(file_path, meta_sheet, data_sheet, group_col, filter_exprs):
     df_data['ASIN'] = df_data['ASIN'].astype(str).str.strip()
     df_data = df_data.set_index('ASIN')
     df_data = df_data.drop(columns=['分组'], errors='ignore')
-
-    # 数值化
-    for col in df_data.columns:
-        df_data[col] = pd.to_numeric(df_data[col], errors='coerce')
+    df_data = keep_month_columns(df_data, data_sheet)
 
     # ---- 不分组模式（无筛选条件时直接返回全部） ----
     if not group_col and not filter_exprs:
@@ -950,6 +996,12 @@ def main():
         print(f"  分组字段: {args.group_col}")
     else:
         print(f"  分组:     无（全部ASIN合计）")
+
+    # 0. 确保输出目录存在（默认输出到「规划」文件夹时可能尚未创建）
+    for p in (args.output, args.export_data):
+        d = os.path.dirname(p)
+        if p and d:
+            os.makedirs(d, exist_ok=True)
 
     # 1. 加载数据
     groups, df_data, meta_df = load_data(

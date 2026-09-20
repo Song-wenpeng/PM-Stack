@@ -2,9 +2,11 @@
 """销量数据模块 — 数据清洗、属性分组趋势、市场占比"""
 
 import os
+import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QFormLayout, QLineEdit,
     QHBoxLayout, QComboBox, QLabel, QCheckBox, QSpinBox, QScrollArea,
+    QPlainTextEdit,
 )
 from PyQt6.QtCore import Qt
 
@@ -20,6 +22,8 @@ MODULE_INFO = {
     "order": 2,
     "description": "数据清洗、属性分组趋势图、市场占比",
 }
+
+MAX_CROSS_FILTERS = 10
 
 
 class ModuleWidget(QWidget):
@@ -40,6 +44,11 @@ class ModuleWidget(QWidget):
         t1 = QVBoxLayout(tab1)
         t1.setContentsMargins(0, 0, 0, 0)
         t1.setSpacing(14)
+
+        tab2 = QWidget()
+        t2 = QVBoxLayout(tab2)
+        t2.setContentsMargins(0, 0, 0, 0)
+        t2.setSpacing(14)
 
         card_split = Card("单文件销量拆分",
                           "选择单个 Excel 文件，按 ASIN/子体拆分销量数据")
@@ -67,33 +76,87 @@ class ModuleWidget(QWidget):
         card_batch.content_layout.addLayout(form1b)
         t1.addWidget(card_batch)
 
-        card_trend = Card("ASIN 趋势提取",
-                          "从拆分文件夹中按 ASIN 提取指定字段的时间序列，生成数据表和趋势图")
+        card_trend = Card(
+            "ASIN 历史趋势",
+            "直接输入多个 ASIN，跨历史拆分文件生成与交叉属性一致的趋势图和明细数据",
+        )
         form2 = QFormLayout()
         form2.setSpacing(10)
-        self.trend_folder = FileDropLineEdit(want_dir=True, placeholder="拆分结果所在文件夹")
-        form2.addRow("拆分文件夹:", file_row(self.trend_folder, "dir", parent=self))
-        self.trend_config = FileDropLineEdit(placeholder="ASIN 配置文件（xlsx/csv/json）")
-        form2.addRow("ASIN配置:", file_row(self.trend_config, "open", parent=self))
+        self.trend_folder = FileDropLineEdit(
+            want_dir=True, placeholder="选择或拖入历史数据文件夹（含 *_销量拆分.xlsx）")
+        form2.addRow("历史数据文件夹:",
+                     file_row(self.trend_folder, "dir", parent=self))
 
-        self.trend_field = configure_combo(QComboBox())
-        self.trend_field.setEditable(True)
-        self.trend_field.addItems(["子体销量_矫正", "子体销售额_矫正", "月销量", "月销售额($)"])
-        form2.addRow("提取字段:", self.trend_field)
+        self.trend_second_file = FileDropLineEdit(
+            placeholder="可选：补充历史数据的 Excel 文件")
+        form2.addRow("第二数据来源:",
+                     file_row(self.trend_second_file, "open", parent=self))
 
-        self.trend_group_col = QLineEdit()
-        self.trend_group_col.setPlaceholderText("如: 颜色、排插类型（可选）")
-        form2.addRow("分组列:", self.trend_group_col)
+        self.trend_volume_sheet = QLineEdit()
+        self.trend_volume_sheet.setPlaceholderText("第二数据来源中的销量历史 Sheet")
+        form2.addRow("销量数据Sheet:", self.trend_volume_sheet)
 
-        self.trend_output = QLineEdit()
-        self.trend_output.setPlaceholderText("输出文件前缀（可选）")
-        form2.addRow("输出前缀:", self.trend_output)
+        self.trend_revenue_sheet = QLineEdit()
+        self.trend_revenue_sheet.setPlaceholderText("第二数据来源中的销额历史 Sheet")
+        form2.addRow("销额数据Sheet:", self.trend_revenue_sheet)
+        self._trend_volume_sheet_label = form2.labelForField(
+            self.trend_volume_sheet)
+        self._trend_revenue_sheet_label = form2.labelForField(
+            self.trend_revenue_sheet)
 
-        self.run_btn2 = make_button("执行趋势提取", "primary")
+        self.trend_asins = QPlainTextEdit()
+        self.trend_asins.setPlaceholderText(
+            "直接粘贴 ASIN；支持逗号、空格或换行分隔，例如：\n"
+            "B00DOMYL24\nB014EKQ5AA\nB09Y8FRMQV")
+        self.trend_asins.setFixedHeight(88)
+        form2.addRow("ASIN列表:", self.trend_asins)
+
+        self.trend_volume_field = configure_combo(QComboBox())
+        self.trend_volume_field.setEditable(True)
+        self.trend_volume_field.addItems(["子体销量_矫正", "月销量", "子体销量"])
+        form2.addRow("销量字段:", self.trend_volume_field)
+
+        self.trend_revenue_field = configure_combo(QComboBox())
+        self.trend_revenue_field.setEditable(True)
+        self.trend_revenue_field.addItems(
+            ["子体销售额_矫正", "月销售额($)", "子体销售额($)"])
+        form2.addRow("销额字段:", self.trend_revenue_field)
+
+        self.trend_mode = configure_combo(QComboBox())
+        self.trend_mode.addItems(["销量趋势", "销额趋势", "销量&均价趋势"])
+        self.trend_mode.setToolTip(
+            "输出逻辑与交叉属性一致；均价按所选 ASIN 的销额合计 ÷ 销量合计计算")
+        form2.addRow("趋势模式:", self.trend_mode)
+        self.trend_mode_hint = make_hint_label("")
+        form2.addRow(self.trend_mode_hint)
+        self.trend_mode.currentIndexChanged.connect(self._update_trend_mode_ui)
+        self._update_trend_mode_ui(self.trend_mode.currentIndex())
+
+        self.trend_output = FileDropLineEdit(
+            placeholder="留空默认：历史数据文件夹同级「规划」文件夹，按 ASIN 组合命名")
+        form2.addRow("输出文件:",
+                     file_row(self.trend_output, "save", parent=self))
+
+        self.trend_export = FileDropLineEdit(
+            placeholder="留空默认：历史数据文件夹同级「规划」文件夹，按 ASIN 组合命名")
+        form2.addRow("导出数据:",
+                     file_row(self.trend_export, "save", parent=self))
+
+        trend_btn_row = QHBoxLayout()
+        trend_btn_row.setSpacing(10)
+        self.run_btn2 = make_button("生成趋势图", "primary")
         self.run_btn2.clicked.connect(self._run_trend)
-        form2.addRow(self.run_btn2)
+        trend_btn_row.addWidget(self.run_btn2)
+        self.export_btn2 = make_button("导出数据")
+        self.export_btn2.clicked.connect(self._run_trend_export)
+        trend_btn_row.addWidget(self.export_btn2)
+        trend_btn_row.addStretch()
+        form2.addRow(trend_btn_row)
         card_trend.content_layout.addLayout(form2)
-        t1.addWidget(card_trend)
+        t2.addWidget(card_trend)
+        self.log2 = LogConsole()
+        t2.addWidget(self.log2)
+        t2.addStretch()
 
         card_fix = Card(
             "数据修正",
@@ -132,6 +195,7 @@ class ModuleWidget(QWidget):
         t1.addWidget(self.log1)
         t1.addStretch()
         tabs.addTab(tab1, "数据清洗")
+        tabs.addTab(tab2, "ASIN趋势")
 
         # ================= Tab 3: 交叉属性 =================
         tab4 = QWidget()
@@ -140,7 +204,8 @@ class ModuleWidget(QWidget):
         t4.setSpacing(14)
 
         card4 = Card("交叉属性趋势（多条件筛选）",
-                     "多筛选条件交叉分析，支持 1-5 个条件动态组合，可选双轴模式和导出数据")
+                     f"多筛选条件交叉分析，支持 1-{MAX_CROSS_FILTERS} 个条件动态组合，"
+                     "可选双轴模式和导出数据")
         form4 = QFormLayout()
         form4.setSpacing(10)
 
@@ -172,11 +237,12 @@ class ModuleWidget(QWidget):
             self._update_cross_mode_ui)
         self._update_cross_mode_ui(self.cross_trend_mode.currentIndex())
 
-        self.cross_output = FileDropLineEdit(placeholder="输出文件路径（可选）")
+        self.cross_output = FileDropLineEdit(
+            placeholder="留空默认: Excel父目录下「规划」文件夹，按筛选值+分组字段命名")
         form4.addRow("输出文件:", file_row(self.cross_output, "save", parent=self))
 
         self.cross_filter_count = QSpinBox()
-        self.cross_filter_count.setRange(1, 5)
+        self.cross_filter_count.setRange(1, MAX_CROSS_FILTERS)
         self.cross_filter_count.setValue(2)
         self.cross_filter_count.valueChanged.connect(self._rebuild_filter_rows)
         form4.addRow("筛选条件数:", self.cross_filter_count)
@@ -193,7 +259,8 @@ class ModuleWidget(QWidget):
         self.cross_filter_rows = []
         self._rebuild_filter_rows(2)
 
-        self.cross_export = FileDropLineEdit(placeholder="导出数据文件路径（可选）")
+        self.cross_export = FileDropLineEdit(
+            placeholder="留空默认: Excel父目录下「规划」文件夹，按筛选值+分组字段命名")
         form4.addRow("导出数据:", file_row(self.cross_export, "save", parent=self))
 
         btn_row = QHBoxLayout()
@@ -326,28 +393,131 @@ class ModuleWidget(QWidget):
             return
         self._run("batch_sales_split.py", self.log1, [d, "--yes"], run_btn=self.run_btn1b)
 
-    def _run_trend(self):
+    @staticmethod
+    def _parse_asin_input(text):
+        """解析逗号、空格、分号或换行分隔的 ASIN，并按输入顺序去重。"""
+        tokens = re.split(r"[\s,，;；]+", text or "")
+        result = []
+        seen = set()
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            if ":" in token:
+                asin, label = token.split(":", 1)
+                token = f"{asin.strip().upper()}:{label.strip()}"
+                key = asin.strip().upper()
+            else:
+                token = token.upper()
+                key = token
+            if key and key not in seen:
+                seen.add(key)
+                result.append(token)
+        return result
+
+    def _trend_default_path(self, ext, folder=None, asins=None):
+        """生成与交叉属性一致的 ASIN 组合默认输出路径。"""
+        folder = folder or self.trend_folder.text().strip()
+        second_file = self.trend_second_file.text().strip()
+        if not folder and not second_file:
+            return ""
+        asin_names = [item.split(":", 1)[0] for item in (asins or [])]
+        shown = asin_names[:3]
+        source_name = "_".join(shown)
+        if len(asin_names) > 3:
+            source_name += f"_等{len(asin_names)}个"
+
+        stem = self._sanitize_filename(source_name) or "ASIN趋势"
+        if folder:
+            base_dir = os.path.dirname(os.path.abspath(folder))
+        else:
+            base_dir = os.path.dirname(os.path.abspath(second_file))
+        output_dir = os.path.join(base_dir, "规划")
+        return os.path.join(output_dir, f"{stem}{ext}")
+
+    def _update_trend_mode_ui(self, index):
+        if index == 0:
+            self._trend_volume_sheet_label.setText("销量数据Sheet *:")
+            self._trend_revenue_sheet_label.setText("销额数据Sheet:")
+            hint = "销量趋势使用销量字段；启用第二数据来源时需填写销量数据Sheet。"
+        elif index == 1:
+            self._trend_volume_sheet_label.setText("销量数据Sheet:")
+            self._trend_revenue_sheet_label.setText("销额数据Sheet *:")
+            hint = "销额趋势使用销额字段；启用第二数据来源时需填写销额数据Sheet。"
+        else:
+            self._trend_volume_sheet_label.setText("销量数据Sheet *:")
+            self._trend_revenue_sheet_label.setText("销额数据Sheet *:")
+            hint = ("销量与均价双轴趋势使用两个来源字段；启用第二数据来源时需填写"
+                    "两个 Sheet，均价按销额合计 ÷ 销量合计计算。")
+        self.trend_mode_hint.setText(hint)
+
+    def _trend_base_args(self, require_both=False):
+        """校验 ASIN 历史输入并返回公共脚本参数；失败时返回 None。"""
         folder = self.trend_folder.text().strip()
-        if not folder:
-            self.log1.append("[提示] 请填写「拆分文件夹」路径")
+        second_file = self.trend_second_file.text().strip()
+        if not folder and not second_file:
+            self.log2.append("[提示] 请至少选择「历史数据文件夹」或「第二数据来源」")
+            return None
+        asins = self._parse_asin_input(self.trend_asins.toPlainText())
+        if not asins:
+            self.log2.append("[提示] 请直接输入至少一个 ASIN")
+            return None
+
+        volume_field = self.trend_volume_field.currentText().strip()
+        revenue_field = self.trend_revenue_field.currentText().strip()
+        mode_index = self.trend_mode.currentIndex()
+        if (require_both or mode_index in (0, 2)) and not volume_field:
+            self.log2.append("[提示] 请选择或填写「销量字段」")
+            return None
+        if (require_both or mode_index in (1, 2)) and not revenue_field:
+            self.log2.append("[提示] 请选择或填写「销额字段」")
+            return None
+
+        volume_sheet = self.trend_volume_sheet.text().strip()
+        revenue_sheet = self.trend_revenue_sheet.text().strip()
+        if second_file:
+            if (require_both or mode_index in (0, 2)) and not volume_sheet:
+                self.log2.append("[提示] 第二数据来源需要填写「销量数据Sheet」")
+                return None
+            if (require_both or mode_index in (1, 2)) and not revenue_sheet:
+                self.log2.append("[提示] 第二数据来源需要填写「销额数据Sheet」")
+                return None
+
+        mode = ("volume", "revenue", "volume-price")[mode_index]
+        args = ["--mode", mode,
+                "--volume-field", volume_field,
+                "--revenue-field", revenue_field]
+        if folder:
+            args += ["--folder", folder]
+        if second_file:
+            args += ["--second-file", second_file]
+            if volume_sheet:
+                args += ["--volume-sheet", volume_sheet]
+            if revenue_sheet:
+                args += ["--revenue-sheet", revenue_sheet]
+        args += ["--asins", ",".join(asins)]
+        return args, folder, asins
+
+    def _run_trend(self):
+        prepared = self._trend_base_args()
+        if not prepared:
             return
-        config = self.trend_config.text().strip()
-        if not config:
-            self.log1.append("[提示] 请指定 ASIN 配置文件（xlsx/csv/json），或在 --asins 中直接输入 ASIN")
+        args, folder, asins = prepared
+        output_chart = self.trend_output.text().strip() or \
+            self._trend_default_path(".png", folder, asins)
+        args += ["--chart", output_chart, "--no-table"]
+        self._run("extract_asin_trend.py", self.log2, args, run_btn=self.run_btn2)
+
+    def _run_trend_export(self):
+        prepared = self._trend_base_args(require_both=True)
+        if not prepared:
             return
-        field = self.trend_field.currentText().strip()
-        if not field:
-            self.log1.append("[提示] 请选择或填写「提取字段」")
-            return
-        args = ["--folder", folder, "--field", field,
-                "--config", config]
-        gc = self.trend_group_col.text().strip()
-        if gc:
-            args += ["--group-col", gc]
-        out = self.trend_output.text().strip()
-        if out:
-            args += ["--output", out]
-        self._run("extract_asin_trend.py", self.log1, args, run_btn=self.run_btn2)
+        args, folder, asins = prepared
+        output_xlsx = self.trend_export.text().strip() or \
+            self._trend_default_path(".xlsx", folder, asins)
+        args += ["--export-data", output_xlsx, "--export-only", "--no-table"]
+        self._run("extract_asin_trend.py", self.log2, args,
+                  run_btn=self.export_btn2)
 
     def _rebuild_filter_rows(self, count):
         """根据筛选条件数量重建输入行。"""
@@ -405,6 +575,33 @@ class ModuleWidget(QWidget):
             hint = "销量与均价趋势需要两个 Sheet，均价按销额 ÷ 销量计算。"
         self.cross_mode_hint.setText(hint)
 
+    @staticmethod
+    def _sanitize_filename(name):
+        """清除 Windows 文件名非法字符，避免默认命名无法保存。"""
+        for ch in '<>:"/\\|?*':
+            name = name.replace(ch, '_')
+        return name.strip().strip('.')
+
+    def _cross_default_path(self, ext):
+        """默认输出路径: 有值取筛选值，值留空时取分组字段名。"""
+        f = self.cross_file.text().strip()
+        if not f:
+            return ""
+        parts = []
+        for col_edit, val_edit in self.cross_filter_rows:
+            col = col_edit.text().strip()
+            if not col:
+                continue
+            val = val_edit.text().strip()
+            if val:
+                parts.append(val)
+            else:
+                # 值留空表示按该列分组；保留列名可避免不同分组图重名覆盖。
+                parts.append(col)
+        name = self._sanitize_filename("_".join(parts)) or "交叉属性"
+        folder = os.path.join(os.path.dirname(os.path.abspath(f)), "规划")
+        return os.path.join(folder, f"{name}{ext}")
+
     def _run_cross_trend(self):
         f = self.cross_file.text().strip()
         ds = self.cross_data.text().strip()
@@ -442,7 +639,7 @@ class ModuleWidget(QWidget):
                 group_col = col
         if group_col:
             args += ["--group-col", group_col]
-        out = self.cross_output.text().strip()
+        out = self.cross_output.text().strip() or self._cross_default_path(".png")
         if out:
             args += ["--output", out]
         self._run("trend_by_attribute.py", self.log4, args, run_btn=self.run_btn4)
@@ -452,10 +649,10 @@ class ModuleWidget(QWidget):
         f = self.cross_file.text().strip()
         ds = self.cross_data.text().strip()
         ds2 = self.cross_data2.text().strip()
-        export_path = self.cross_export.text().strip()
+        export_path = self.cross_export.text().strip() or self._cross_default_path(".xlsx")
 
         if not f or not ds or not ds2 or not export_path:
-            self.log4.append("错误: 导出数据需要填写 Excel文件、数据Sheet、第二数据Sheet 和 导出数据路径")
+            self.log4.append("错误: 导出数据需要填写 Excel文件、数据Sheet 和 第二数据Sheet")
             return
 
         args = ["--file", f, "--data-sheet", ds, "--data-sheet-2", ds2]

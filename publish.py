@@ -5,15 +5,24 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 MAIN_WINDOW = PROJECT_DIR / "core" / "main_window.py"
 SPEC_TEMPLATE = list(PROJECT_DIR.glob("PM Stack V*.spec"))
 DIST_EXE = PROJECT_DIR / "dist" / "PM Stack.exe"
+DIST_UPDATER = PROJECT_DIR / "dist" / "PM Stack Updater.exe"
+UPDATER_SPEC = PROJECT_DIR / "PM Stack Updater.spec"
 UPDATE_JSON = PROJECT_DIR / "update.json"
+UPDATE_CHANNEL = PROJECT_DIR / "update-channel.json"
+RELEASE_DIR = PROJECT_DIR / "release"
+RELEASE_CURRENT = RELEASE_DIR / "current"
+RELEASE_ARCHIVE = RELEASE_DIR / "archive"
+RELEASE_GUIDE = PROJECT_DIR / "发布更新指南.md"
 GH_CLI = Path(r"D:\PM Stack\tools-gh\gh.exe")
 
 
@@ -53,7 +62,52 @@ def run(cmd, **kwargs):
     return result
 
 
+def prepare_release_artifacts(version):
+    """生成干净的当前分发目录、版本归档和首次分发压缩包。"""
+    distribution_files = (
+        (DIST_EXE, "PM Stack.exe"),
+        (DIST_UPDATER, "PM Stack Updater.exe"),
+        (UPDATE_CHANNEL, "update-channel.json"),
+    )
+    archive_files = distribution_files + (
+        (UPDATE_JSON, "update.json"),
+        (RELEASE_GUIDE, "发布更新指南.md"),
+    )
+
+    missing = [str(source) for source, _ in archive_files
+               if not source.exists()]
+    if missing:
+        print("错误: 缺少发布文件:")
+        for path in missing:
+            print(f"  {path}")
+        sys.exit(1)
+
+    RELEASE_CURRENT.mkdir(parents=True, exist_ok=True)
+    version_dir = RELEASE_ARCHIVE / version
+    version_dir.mkdir(parents=True, exist_ok=True)
+
+    for source, name in distribution_files:
+        shutil.copy2(source, RELEASE_CURRENT / name)
+    for source, name in archive_files:
+        shutil.copy2(source, version_dir / name)
+
+    zip_path = version_dir / f"PM Stack {version} 首次分发.zip"
+    temp_zip = zip_path.with_name(zip_path.name + ".tmp")
+    try:
+        with zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+            for _, name in distribution_files:
+                archive.write(RELEASE_CURRENT / name, arcname=name)
+        os.replace(temp_zip, zip_path)
+    finally:
+        if temp_zip.exists():
+            temp_zip.unlink()
+
+    return version_dir, zip_path
+
+
 def main():
+    if sys.version_info < (3, 12):
+        raise RuntimeError("发布需要 Python 3.12+，请使用 .venv-review/Scripts/python.exe publish.py")
     os.chdir(PROJECT_DIR)
 
     current = get_current_version()
@@ -71,32 +125,37 @@ def main():
 
     notes = input("版本说明 (可留空): ").strip() or f"发布 {new_version}"
 
-    print("\n[1/5] 更新版本号...")
+    print("\n[1/6] 更新版本号...")
     set_version(new_version)
 
     spec_file = None
     if SPEC_TEMPLATE:
         spec_file = PROJECT_DIR / f"PM Stack {new_version}.spec"
         if not spec_file.exists():
-            old_spec = SPEC_TEMPLATE[-1]
+            current_spec = PROJECT_DIR / f"PM Stack {current}.spec"
+            old_spec = (current_spec if current_spec.exists()
+                        else max(SPEC_TEMPLATE,
+                                 key=lambda path: path.stat().st_mtime))
             spec_text = old_spec.read_text(encoding="utf-8")
             spec_file.write_text(spec_text, encoding="utf-8")
             print(f"  基于 {old_spec.name} 创建 {spec_file.name}")
 
-    print("\n[2/5] 打包 EXE (PyInstaller)...")
-    pyinstaller_cmd = [sys.executable, "-m", "PyInstaller"]
+    print("\n[2/6] 打包主程序和更新器 (PyInstaller)...")
+    pyinstaller_cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm"]
     if spec_file and spec_file.exists():
         pyinstaller_cmd.append(str(spec_file))
     else:
         pyinstaller_cmd.extend(["--onefile", "--noconsole", "--name", "PM Stack", "main.py"])
     run(pyinstaller_cmd)
+    run([sys.executable, "-m", "PyInstaller", "--noconfirm",
+         str(UPDATER_SPEC)])
 
-    if not DIST_EXE.exists():
-        print("错误: 打包后未找到 dist/PM Stack.exe")
+    if not DIST_EXE.exists() or not DIST_UPDATER.exists():
+        print("错误: 打包后未找到主程序或更新器")
         sys.exit(1)
     print(f"  EXE 大小: {DIST_EXE.stat().st_size / 1024 / 1024:.1f} MB")
 
-    print("\n[3/5] 生成 update.json...")
+    print("\n[3/6] 生成 update.json...")
     manifest = {
         "version": new_version.lstrip("v"),
         "url": "PM Stack.exe",
@@ -110,14 +169,20 @@ def main():
     )
     print(f"  SHA-256: {manifest['sha256']}")
 
-    print("\n[4/5] 推送到 GitHub...")
+    print("\n[4/6] 整理分发文件...")
+    version_dir, release_zip = prepare_release_artifacts(new_version)
+    print(f"  当前分发目录: {RELEASE_CURRENT}")
+    print(f"  版本归档目录: {version_dir}")
+    print(f"  首次分发压缩包: {release_zip}")
+
+    print("\n[5/6] 推送到 GitHub...")
     run(["git", "add", "core/main_window.py", "update.json"])
     if spec_file and spec_file.exists():
         run(["git", "add", str(spec_file)])
     run(["git", "commit", "-m", f"发布 {new_version}"])
     run(["git", "push"])
 
-    print("\n[5/5] 创建 GitHub Release...")
+    print("\n[6/6] 创建 GitHub Release...")
     tag = new_version if new_version.startswith("v") else f"v{new_version}"
     run([
         str(GH_CLI), "release", "create", tag,
@@ -134,7 +199,6 @@ def main():
     print(f"\n需要上传的文件:")
     print(f"  1. {DIST_EXE}")
     print(f"  2. {UPDATE_JSON}")
-    release_zip = PROJECT_DIR / "release" / f"PM Stack {new_version} 首次分发.zip"
     if release_zip.exists():
         print(f"  3. {release_zip}")
     print()

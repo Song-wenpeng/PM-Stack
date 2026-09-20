@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QFormLayout, QLineEdit,
     QHBoxLayout, QFileDialog, QLabel, QComboBox, QCheckBox, QScrollArea,
     QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QAbstractItemView,
+    QAbstractItemView, QSpinBox,
 )
 from PyQt6.QtCore import Qt
 
@@ -294,6 +294,22 @@ class ModuleWidget(QWidget):
         self.vision_cb.setChecked(True)
         form1.addRow(self.vision_cb)
 
+        # 并发选项
+        conc_row = QHBoxLayout()
+        conc_row.setSpacing(8)
+        self.fast_cb = QCheckBox("并发加速")
+        self.fast_cb.setChecked(True)
+        self.fast_cb.setToolTip("使用线程池并发处理，显著加快速度；支持断点续跑与失败标记")
+        conc_row.addWidget(self.fast_cb)
+        conc_row.addWidget(make_hint_label("并发数:"))
+        self.concurrency_spin = QSpinBox()
+        self.concurrency_spin.setRange(1, 16)
+        self.concurrency_spin.setValue(4)
+        self.concurrency_spin.setToolTip("同时处理的行数，视觉模型较多时建议 2-4")
+        conc_row.addWidget(self.concurrency_spin)
+        conc_row.addStretch()
+        form1.addRow(conc_row)
+
         self._stop_file = os.path.join(tempfile.gettempdir(), "extract_stop.signal")
         btn_row1 = QHBoxLayout()
         btn_row1.setSpacing(10)
@@ -536,9 +552,15 @@ class ModuleWidget(QWidget):
         # 清除旧的停止信号
         if os.path.exists(self._stop_file):
             os.remove(self._stop_file)
+        # 根据并发选项选择脚本
+        if self.fast_cb.isChecked():
+            script = "exstract_from_description_fast.py"
+            env["EXTRACT_CONCURRENCY"] = str(self.concurrency_spin.value())
+        else:
+            script = "exstract_from_description.py"
         self.stop_btn1.setEnabled(True)
         started = self._run(
-            "exstract_from_description.py", self.log1, env,
+            script, self.log1, env,
             run_btn=self.run_btn1, finished_callback=self._on_extraction_done,
         )
         if not started:

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Regression tests for PM Stack security, UI and self-update fixes."""
 
+from tests import support
+
 import hashlib
 import io
 import json
@@ -15,6 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
+import pandas as pd
 from PyQt6.QtWidgets import QApplication, QComboBox
 
 from core.config_manager import ConfigManager
@@ -23,6 +26,7 @@ from core.main_window import MainWindow, SettingsDialog
 from core.runner import ScriptRunner
 from core.updater import _safe_extract_zip
 from scripts.fix_sales_data import fix_single
+from scripts.trend_by_attribute import keep_month_columns
 from updater_main import install_update
 
 
@@ -179,6 +183,10 @@ class ApplicationUpdaterTests(unittest.TestCase):
 
 
 class RunnerIsolationTests(unittest.TestCase):
+    def setUp(self):
+        support.qt_app()
+        self.addCleanup(support.cleanup_qt_widgets)
+
     def test_runpy_tasks_are_globally_serialized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             slow_script = Path(temp_dir) / "slow.py"
@@ -201,13 +209,13 @@ class RunnerIsolationTests(unittest.TestCase):
             self.assertFalse(second.is_running())
 
     def test_main_window_uses_one_runner_per_module(self):
-        app = QApplication.instance() or QApplication([])
+        app = support.qt_app()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = str(Path(temp_dir) / "config.json")
             with mock.patch(
                 "core.main_window.ConfigManager",
                 side_effect=lambda: ConfigManager(config_path),
-            ):
+            ), mock.patch("core.main_window.ApplicationUpdater.check_update"), mock.patch("core.main_window.Updater.check_update"):
                 window = MainWindow()
                 try:
                     runners = [widget.runner for _, widget in window._modules]
@@ -219,14 +227,18 @@ class RunnerIsolationTests(unittest.TestCase):
 
 
 class UIInteractionTests(unittest.TestCase):
+    def setUp(self):
+        support.qt_app()
+        self.addCleanup(support.cleanup_qt_widgets)
+
     def test_dropdowns_and_dependent_controls_keep_visible_state_consistent(self):
-        app = QApplication.instance() or QApplication([])
+        app = support.qt_app()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = str(Path(temp_dir) / "config.json")
             with mock.patch(
                 "core.main_window.ConfigManager",
                 side_effect=lambda: ConfigManager(config_path),
-            ):
+            ), mock.patch("core.main_window.ApplicationUpdater.check_update"), mock.patch("core.main_window.Updater.check_update"):
                 window = MainWindow()
 
             try:
@@ -241,8 +253,23 @@ class UIInteractionTests(unittest.TestCase):
 
                 combos = window.findChildren(QComboBox)
                 # 评论分析 TEST 模块也包含一个品类下拉框。
-                self.assertEqual(len(combos), 10)
-                self.assertTrue(all(combo.count() > 0 for combo in combos))
+                legacy_combos = [
+                    combo for combo in combos
+                    if not matrix.free_matrix.isAncestorOf(combo)
+                    and not comments.review_collection.isAncestorOf(combo)
+                ]
+                self.assertEqual(len(legacy_combos), 12)
+                self.assertTrue(all(combo.count() > 0 for combo in legacy_combos))
+                review_combos = [
+                    combo for combo in combos
+                    if comments.review_collection.isAncestorOf(combo)
+                ]
+                self.assertEqual(len(review_combos), 5)
+                self.assertTrue(all(combo.count() > 0 for combo in review_combos))
+                collected = str(Path(temp_dir) / "collected_reviews.xlsx")
+                comments._use_collected_review_file(collected)
+                self.assertEqual(comments.s12_input.text(), collected)
+                self.assertEqual(comments.tabs.currentIndex(), 3)
                 self.assertEqual(comments_test.concurrency_spin.value(), 8)
                 self.assertEqual(comments_test.rpm_spin.value(), 900)
                 self.assertEqual(comments_test.tpm_spin.value(), 90000)
@@ -272,20 +299,87 @@ class UIInteractionTests(unittest.TestCase):
 
                 sales.cross_filter_rows[0][0].setText("品牌")
                 sales.cross_filter_rows[0][1].setText("A")
-                sales.cross_filter_count.setValue(3)
+                self.assertEqual(sales.cross_filter_count.maximum(), 10)
+                sales.cross_filter_count.setValue(10)
+                self.assertEqual(len(sales.cross_filter_rows), 10)
                 self.assertEqual(sales.cross_filter_rows[0][0].text(), "品牌")
                 self.assertEqual(sales.cross_filter_rows[0][1].text(), "A")
+                sales.cross_filter_count.setValue(3)
+                sales.cross_filter_rows[1][0].setText("形态")
+                sales.cross_filter_rows[1][1].setText("条形")
+                sales.cross_filter_rows[2][0].setText("分组字段")
+                sales.cross_file.setText(str(Path(temp_dir) / "input.xlsx"))
+                self.assertEqual(
+                    sales._cross_default_path(".png"),
+                    str(Path(temp_dir) / "规划" / "A_条形_分组字段.png"),
+                )
                 sales.cross_filter_count.setValue(1)
                 self.assertEqual(sales.cross_filter_rows[0][0].text(), "品牌")
                 self.assertEqual(sales.cross_filter_rows[0][1].text(), "A")
 
                 sales.trend_folder.setText(temp_dir)
-                sales.trend_config.setText(first)
-                sales.trend_field.setEditText("   ")
+                sales.trend_asins.setPlainText("B00DOMYL24")
+                sales.trend_volume_field.setEditText("   ")
                 with mock.patch.object(sales, "_run") as run_sales:
                     sales._run_trend()
                 run_sales.assert_not_called()
-                self.assertIn("提取字段", sales.log1.text.toPlainText())
+                self.assertIn("销量字段", sales.log2.text.toPlainText())
+
+                history_dir = str(Path(temp_dir) / "排插_US_历史数据")
+                sales.trend_folder.setText(history_dir)
+                sales.trend_asins.setPlainText(
+                    "b00domyl24, B014EKQ5AA\nb00domyl24")
+                sales.trend_volume_field.setEditText("子体销量_矫正")
+                sales.trend_revenue_field.setEditText("子体销售额_矫正")
+                sales.trend_mode.setCurrentIndex(0)
+                sales.trend_second_file.setText(first)
+                sales.trend_volume_sheet.setText("子体销量")
+                with mock.patch.object(sales, "_run", return_value=True) as run_sales:
+                    sales._run_trend()
+                trend_args = run_sales.call_args.args[2]
+                self.assertIn("--asins", trend_args)
+                self.assertEqual(
+                    trend_args[trend_args.index("--asins") + 1],
+                    "B00DOMYL24,B014EKQ5AA",
+                )
+                self.assertEqual(
+                    trend_args[trend_args.index("--chart") + 1],
+                    str(Path(temp_dir) / "规划" /
+                        "B00DOMYL24_B014EKQ5AA.png"),
+                )
+                self.assertEqual(
+                    trend_args[trend_args.index("--mode") + 1], "volume")
+                self.assertEqual(
+                    trend_args[trend_args.index("--second-file") + 1], first)
+                self.assertEqual(
+                    trend_args[trend_args.index("--volume-sheet") + 1],
+                    "子体销量",
+                )
+
+                sales.trend_mode.setCurrentIndex(2)
+                self.assertIn("均价", sales.trend_mode_hint.text())
+                self.assertEqual(
+                    sales._trend_volume_sheet_label.text(),
+                    "销量数据Sheet *:",
+                )
+                self.assertEqual(
+                    sales._trend_revenue_sheet_label.text(),
+                    "销额数据Sheet *:",
+                )
+                sales.trend_revenue_sheet.setText("子体销额")
+                with mock.patch.object(sales, "_run", return_value=True) as run_sales:
+                    sales._run_trend_export()
+                export_args = run_sales.call_args.args[2]
+                self.assertEqual(
+                    export_args[export_args.index("--export-data") + 1],
+                    str(Path(temp_dir) / "规划" /
+                        "B00DOMYL24_B014EKQ5AA.xlsx"),
+                )
+                self.assertIn("--export-only", export_args)
+                self.assertEqual(
+                    export_args[export_args.index("--mode") + 1],
+                    "volume-price",
+                )
 
                 sales.cross_trend_mode.setCurrentIndex(1)
                 self.assertEqual(sales._cross_data_label.text(), "数据Sheet:")
@@ -340,6 +434,19 @@ class UIInteractionTests(unittest.TestCase):
 
 
 class ExcelSafetyTests(unittest.TestCase):
+    def test_trend_data_ignores_unnamed_and_non_month_columns(self):
+        source = pd.DataFrame({
+            "2025-01": [10, 20],
+            "2025-02": [30, 40],
+            "Unnamed: 4": [None, 99],
+            "备注": ["a", "b"],
+        }, index=["B00A", "B00B"])
+
+        cleaned = keep_month_columns(source, "子体销量")
+
+        self.assertEqual(list(cleaned.columns), ["2025-01", "2025-02"])
+        self.assertEqual(cleaned.loc["B00B", "2025-02"], 40)
+
     def test_fix_preserves_workbook_and_creates_backup(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workbook_path = Path(temp_dir) / "market_2025-03_销量拆分.xlsx"

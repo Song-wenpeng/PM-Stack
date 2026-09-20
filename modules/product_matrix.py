@@ -225,6 +225,9 @@ class ModuleWidget(QWidget):
             "以品牌为列、三级分类为行，单元格嵌入主图+ASIN+属性，支持变体合并")
 
         layout.addWidget(tabs)
+        from core.matrix_workspace import MatrixWorkspace
+        self.free_matrix = MatrixWorkspace(self)
+        tabs.addTab(self.free_matrix, "自由组合矩阵")
 
     def _update_sort_order_state(self, text):
         enabled = bool(text.strip())

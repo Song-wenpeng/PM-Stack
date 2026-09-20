@@ -20,13 +20,14 @@ from core.widgets import (
     file_row, set_running_state, default_output, make_hint_label,
     browse_file, browse_save_file, browse_dir,
 )
+from core.reviews.panel import ReviewCollectionPanel
 
 MODULE_INFO = {
     "name": "评论分析",
     "icon": "💬",
     "category": "分析中心",
     "order": 1,
-    "description": "评论 AI 提取、归类、可视化看板",
+    "description": "Amazon 评论采集、云端存储、AI 提取与归类",
 }
 
 
@@ -61,6 +62,16 @@ class ModuleWidget(QWidget):
         layout.addWidget(cfg_card)
 
         tabs = QTabWidget()
+        self.tabs = tabs
+
+        # ================= Tab 0: 评论采集、评论库与云端 =================
+        self.review_collection = ReviewCollectionPanel(
+            self.config_mgr, self.runner, parent=self
+        )
+        self.review_collection.analysis_requested.connect(
+            self._use_collected_review_file
+        )
+        tabs.addTab(self.review_collection, "采集与云端")
 
         # ================= Tab 1: AI提取评论标签 =================
         tab1 = QWidget()
@@ -221,6 +232,17 @@ class ModuleWidget(QWidget):
         self._refresh_cfg_status()
 
     # ---- 小工具 ----
+
+    def _use_collected_review_file(self, path):
+        """Receive a compatible workbook exported from the review library."""
+        self.s12_input.setText(path)
+        self.s12_sheets.clear()
+        self.tabs.setCurrentWidget(self.tabs.widget(3))
+        self.log_s12.clear()
+        self.log_s12.append(
+            f"[已就绪] 已载入评论库导出文件：\n{path}\n"
+            "请选择分析品类，然后点击“一键完成分析”。"
+        )
 
     @staticmethod
     def _auto_output(input_edit, output_edit, suffix):

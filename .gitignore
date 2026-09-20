@@ -16,11 +16,19 @@ config.json
 # ===== 内部文档（不公开）=====
 优化思路.xlsx
 文字文稿.docx
+docs/
+待更新需求.md
 
 # ===== 工具残留 =====
 .workbuddy/
 .worktrees/
+.venv/
+.pytest_cache/
 
 # ===== 系统文件 =====
 Thumbs.db
 .DS_Store
+
+.review-local/
+.runtime-local/
+.venv-review/

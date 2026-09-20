@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "PM Stack 评论助手",
+  "version": "0.1.0",
+  "description": "在日常浏览器中读取指定 Amazon 商品的一页评论，发送到本机 PM Stack。",
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:18765/*",
+    "https://www.amazon.com/*",
+    "https://www.amazon.co.uk/*",
+    "https://www.amazon.de/*",
+    "https://www.amazon.co.jp/*",
+    "https://www.amazon.com.au/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PM Stack 评论助手"
+  }
+}

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Regression tests for the concurrent comment-analysis test path."""
 
+from tests import support
+
 import importlib.util
 import json
 import os
