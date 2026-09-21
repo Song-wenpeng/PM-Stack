@@ -294,6 +294,15 @@ class ModuleWidget(QWidget):
         self.vision_cb.setChecked(True)
         form1.addRow(self.vision_cb)
 
+        self.fetch_cb = QCheckBox("自动补抓缺失的五点描述与主副图（边抓边提取）")
+        self.fetch_cb.setChecked(True)
+        self.fetch_cb.setToolTip(
+            "输入表缺少或空着「五点描述」/图片列时，按「商品详情页链接」列实时抓取补齐后再提取；\n"
+            "每个并发线程一个无头 Edge，不弹窗；抓取结果按 ASIN 缓存断点，重跑不重复抓；\n"
+            "抓到的五点描述与 image_1..9 会一并写入输出 Excel。\n"
+            "（默认开启；若输入表已备好五点描述与图片，可取消勾选跳过抓取。）")
+        form1.addRow(self.fetch_cb)
+
         # 并发选项
         conc_row = QHBoxLayout()
         conc_row.setSpacing(8)
@@ -548,12 +557,13 @@ class ModuleWidget(QWidget):
         env["CONFIG_FILE"] = self._get_config_path()
         env["FIELDS"] = ",".join(selected)
         env["ENABLE_VISION"] = "1" if self.vision_cb.isChecked() else "0"
+        env["ENABLE_FETCH"] = "1" if self.fetch_cb.isChecked() else "0"
         env["STOP_FILE"] = self._stop_file
         # 清除旧的停止信号
         if os.path.exists(self._stop_file):
             os.remove(self._stop_file)
-        # 根据并发选项选择脚本
-        if self.fast_cb.isChecked():
+        # 根据并发选项选择脚本（补抓挂在并发版的工作线程里，勾选补抓时强制并发版）
+        if self.fast_cb.isChecked() or self.fetch_cb.isChecked():
             script = "exstract_from_description_fast.py"
             env["EXTRACT_CONCURRENCY"] = str(self.concurrency_spin.value())
         else:

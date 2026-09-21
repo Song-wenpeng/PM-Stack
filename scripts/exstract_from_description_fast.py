@@ -18,6 +18,7 @@ import os
 import re
 import io
 import json
+import queue
 import time
 import random
 import base64
@@ -25,7 +26,7 @@ import hashlib
 import tempfile
 import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -87,6 +88,16 @@ SAVE_EVERY = max(1, int(os.getenv("EXTRACT_SAVE_EVERY", "10")))
 
 STOP_FILE = os.getenv("STOP_FILE", "")
 
+# ---- 商品资料补抓（缺五点描述/主副图时按详情页链接实时抓取）----
+ENABLE_FETCH = os.getenv("ENABLE_FETCH", "0").strip().lower() in ("1", "true", "yes", "y")
+FETCH_LINK_CANDIDATES = ["商品详情页链接", "详情页链接", "商品链接", "链接"]
+FETCH_DELAY = max(0.0, float(os.getenv("FETCH_DELAY", "1")))
+FETCH_WORKERS = max(1, min(8, int(os.getenv(
+    "FETCH_WORKERS", str(min(CONCURRENCY, 4))))))
+# 预抓缓冲深度：抓取线程提前抓好后面若干行放进缓冲，提取 worker 到了直接取、不再等抓取，
+# 从而把"抓取"和"提取"解耦成两级流水线（总耗时≈行数×max(抓取/抓取线程, 提取/提取并发)）。
+FETCH_LOOKAHEAD = max(FETCH_WORKERS, min(30, int(os.getenv(
+    "FETCH_LOOKAHEAD", str(FETCH_WORKERS * 3)))))
 # 固定文本列
 TEXT_COLS = ["商品标题", "详细参数", "SKU", "五点描述"]
 
@@ -130,6 +141,100 @@ def get_vision_client():
                     api_key=VISION_API_KEY, base_url=VISION_BASE_URL,
                     timeout=REQUEST_TIMEOUT)
     return _vision_client
+
+
+# ================= 1.5 商品资料补抓（独立抓取线程池，线程内自建自关无头 Edge） =================
+
+class FetchPool:
+    """抓取线程池：Playwright 对象只能由创建它的线程关闭，因此每个抓取线程
+    在自己的线程内创建并关闭 Edge 会话；工作线程提交 ASIN 请求并等待结果。"""
+
+    def __init__(self, workers, checkpoint, checkpoint_path, lock, stop_check=None):
+        self._queue = queue.Queue()
+        self._checkpoint = checkpoint
+        self._checkpoint_path = checkpoint_path
+        self._lock = lock
+        self._stop_check = stop_check
+        self._inflight: Dict[str, Any] = {}
+        self._threads = [
+            threading.Thread(target=self._loop, daemon=True, name=f"fetch-{i}")
+            for i in range(max(1, workers))
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _save_checkpoint(self):
+        try:
+            with open(self._checkpoint_path, "w", encoding="utf-8") as fh:
+                json.dump(self._checkpoint, fh, ensure_ascii=False)
+        except Exception as exc:
+            print(f"[警告] 抓取断点保存失败：{exc}", flush=True)
+
+    def _loop(self):
+        session = None
+        try:
+            while True:
+                item = self._queue.get()
+                if item is None:
+                    break
+                asin, future = item
+                # 收到停止信号后，把缓冲里排队但还没开始的抓取直接标记跳过，快速排空队列，
+                # 避免停止后还白抓一大批（预抓的行本来就是"提前量"，丢了不影响已完成结果）。
+                if self._stop_check is not None and self._stop_check():
+                    future.set_result({"ok": False, "stopped": True})
+                    continue
+                if session is None:
+                    from core.reviews.product_fetcher import ProductFetcherSession
+                    session = ProductFetcherSession(
+                        headless=True, log_callback=lambda m: print(m, flush=True))
+                    session.start()
+                result = None
+                for attempt in (1, 2):
+                    try:
+                        result = {"ok": True, **session.fetch(asin)}
+                        break
+                    except Exception as exc:
+                        print(f"[抓取] {asin} 第 {attempt} 次尝试失败：{exc}", flush=True)
+                        if attempt == 1:
+                            time.sleep(max(FETCH_DELAY, 3))
+                if result is None:
+                    result = {"ok": False}
+                with self._lock:
+                    self._checkpoint[asin] = result
+                    self._save_checkpoint()
+                future.set_result(result)
+                if FETCH_DELAY:
+                    time.sleep(FETCH_DELAY)
+        finally:
+            if session is not None:
+                session.close()
+
+    def request(self, asin):
+        """提交抓取请求，返回 Future；同一 ASIN 的在途请求复用同一个 Future。"""
+        with self._lock:
+            future = self._inflight.get(asin)
+            if future is None:
+                future = Future()
+                self._inflight[asin] = future
+                self._queue.put((asin, future))
+            return future
+
+    def shutdown(self):
+        for _ in self._threads:
+            self._queue.put(None)
+        for thread in self._threads:
+            thread.join(timeout=60)
+
+
+def apply_fetch_to_row(row, entry):
+    """把抓取结果写入行字典（五点描述 + image_1..9），只改字典不碰 DataFrame。"""
+    bullets = entry.get("bullets") or []
+    if bullets and is_empty(row.get("五点描述")):
+        row["五点描述"] = "About this item\n" + "\n".join(bullets)
+    images = entry.get("images") or []
+    for j, col in enumerate(IMAGE_COLS, 1):
+        if is_empty(row.get(col)) and j <= len(images):
+            row[col] = images[j - 1]
 
 
 # ================= 2. 读取字段配置 =================
@@ -992,7 +1097,11 @@ def main():
 
     missing_text_cols = [col for col in TEXT_COLS if col not in df.columns]
     if missing_text_cols:
-        raise ValueError(f"Excel 中缺少以下文本列：{missing_text_cols}")
+        if not ENABLE_FETCH:
+            raise ValueError(f"Excel 中缺少以下文本列：{missing_text_cols}")
+        for col in missing_text_cols:
+            df[col] = ""
+        print(f"[补抓] 自动补建缺失文本列：{missing_text_cols}", flush=True)
 
     for field in target_fields + AUX_FIELDS:
         if field not in df.columns:
@@ -1029,6 +1138,69 @@ def main():
     # 准备行数据
     rows_data = [row.to_dict() for _, row in df.iterrows()]
     df_columns = list(df.columns)
+    stop_event = threading.Event()
+
+    # ---- 补抓准备：缺资料的行登记 ASIN，工作线程里现抓现用 ----
+    fetch_needed: Dict[int, str] = {}
+    fetch_checkpoint: Dict[str, Any] = {}
+    fetch_checkpoint_path = ""
+    fetch_lock = threading.Lock()
+    fetch_pool = None
+    if ENABLE_FETCH:
+        from core.reviews.product_fetcher import resolve_asin_and_url
+        link_col = next((c for c in FETCH_LINK_CANDIDATES if c in df.columns), None)
+        if link_col is None:
+            raise ValueError(f"已启用补抓但未找到链接列，候选列名：{FETCH_LINK_CANDIDATES}")
+        for col in IMAGE_COLS:
+            if col not in df.columns:
+                df[col] = ""
+        movable = ["五点描述"] + IMAGE_COLS
+        ordered = [c for c in df.columns if c not in movable]
+        if "商品标题" in ordered:
+            pos = ordered.index("商品标题") + 1
+            ordered = ordered[:pos] + ["五点描述"] + ordered[pos:]
+        else:
+            ordered = ordered + ["五点描述"]
+        anchor2 = "商品主图" if "商品主图" in ordered else "五点描述"
+        pos2 = ordered.index(anchor2) + 1
+        ordered = ordered[:pos2] + IMAGE_COLS + ordered[pos2:]
+        df = df[ordered]
+        df_columns = list(df.columns)
+
+        fetch_checkpoint_path = f"{OUTPUT_FILE_LOCAL}.fetch_checkpoint.json"
+        if os.path.exists(fetch_checkpoint_path):
+            try:
+                with open(fetch_checkpoint_path, encoding="utf-8") as fh:
+                    fetch_checkpoint = json.load(fh)
+            except Exception as exc:
+                print(f"[警告] 抓取断点读取失败，忽略：{exc}", flush=True)
+        reused = 0
+        for idx, row in enumerate(rows_data):
+            need = is_empty(row.get("五点描述")) or all(
+                is_empty(row.get(c)) for c in IMAGE_COLS)
+            if not need:
+                continue
+            link = str(row.get(link_col) or "").strip()
+            if not link:
+                continue
+            try:
+                asin, _ = resolve_asin_and_url(link)
+            except Exception:
+                continue
+            entry = fetch_checkpoint.get(asin)
+            if entry and entry.get("ok"):
+                apply_fetch_to_row(row, entry)
+                reused += 1
+            else:
+                fetch_needed[idx] = asin
+        print(f"[补抓] 待抓取 {len(fetch_needed)} 行 | 断点复用 {reused} 行 | "
+              f"提取并发 {CONCURRENCY} | 抓取线程 {FETCH_WORKERS} | "
+              f"预抓缓冲 {FETCH_LOOKAHEAD}", flush=True)
+        fetch_pool = FetchPool(
+            FETCH_WORKERS, fetch_checkpoint, fetch_checkpoint_path, fetch_lock,
+            stop_check=stop_event.is_set)
+        print(f"[补抓] 抓取线程池已启动：{FETCH_WORKERS} 个抓取线程（解耦流水线，提前预抓）",
+              flush=True)
 
     # 结果存储
     results: List[Optional[Dict[str, Any]]] = [None] * n
@@ -1041,7 +1213,6 @@ def main():
     start_time = time.time()
 
     pending = deque()
-    stop_event = threading.Event()
     unsaved_updates = 0
     save_lock = threading.Lock()
 
@@ -1099,6 +1270,37 @@ def main():
 
     pending = deque(i for i, r in enumerate(results) if r is None)
 
+    # ---- 解耦预抓：按提取消费顺序，提前把后面若干行的抓取请求排进抓取线程池 ----
+    # 抓取线程在后台把这些行抓好放进各自 Future 缓冲；提取 worker 走到某行时
+    # request(asin) 命中同一个（多半已完成的）Future，几乎不用等，实现两级流水线。
+    prefetch_order: List[str] = []
+    if ENABLE_FETCH and fetch_pool is not None:
+        _seen_asin = set()
+        for _idx in pending:
+            _asin = fetch_needed.get(_idx)
+            if _asin and _asin not in _seen_asin:
+                _seen_asin.add(_asin)
+                prefetch_order.append(_asin)
+    prefetch_futures: Dict[str, Future] = {}
+    prefetch_cursor = 0
+
+    def pump_prefetch():
+        """维持在途抓取请求数 ≤ FETCH_LOOKAHEAD，让抓取始终跑在提取前面。"""
+        nonlocal prefetch_cursor
+        if not prefetch_order or fetch_pool is None or stop_event.is_set():
+            return
+        outstanding = sum(1 for f in prefetch_futures.values() if not f.done())
+        while prefetch_cursor < len(prefetch_order) and outstanding < FETCH_LOOKAHEAD:
+            asin = prefetch_order[prefetch_cursor]
+            prefetch_cursor += 1
+            if asin in prefetch_futures:
+                continue
+            prefetch_futures[asin] = fetch_pool.request(asin)
+            outstanding += 1
+        if len(prefetch_futures) > FETCH_LOOKAHEAD * 4:
+            for a in [a for a, f in prefetch_futures.items() if f.done()]:
+                prefetch_futures.pop(a, None)
+
     def print_progress(force=False):
         done = stats["completed"]
         if not force and done % PROGRESS_EVERY != 0 and done != n:
@@ -1113,6 +1315,21 @@ def main():
             flush=True)
 
     def worker(index: int):
+        row = rows_data[index]
+        if ENABLE_FETCH and index in fetch_needed and not stop_event.is_set():
+            asin = fetch_needed[index]
+            with fetch_lock:
+                entry = fetch_checkpoint.get(asin)
+            if not (entry and entry.get("ok")):
+                entry = fetch_pool.request(asin).result()
+            if entry.get("ok"):
+                apply_fetch_to_row(row, entry)
+                print(f"[补抓] 第 {index + 1} 行 {asin}：五点 "
+                      f"{len(entry.get('bullets') or [])} 条、图片 "
+                      f"{len(entry.get('images') or [])} 张", flush=True)
+            else:
+                print(f"[补抓] 第 {index + 1} 行 {asin} 抓取失败，按现有列继续提取",
+                      flush=True)
         return process_single_row(
             index, rows_data[index], df_columns, target_fields,
             field_config, product_name, vision_allowed_fields,
@@ -1134,6 +1351,7 @@ def main():
         if check_stop_file():
             stop_event.set()
             stats["stopped"] = True
+        pump_prefetch()
         submit_until_full()
 
         while in_flight:
@@ -1154,6 +1372,11 @@ def main():
                     print(f"[失败] 第 {idx + 1} 行异常: {exc}", flush=True)
                     result, status = {}, "AI提取失败"
 
+                if ENABLE_FETCH and idx in fetch_needed:
+                    for col in ["五点描述"] + IMAGE_COLS:
+                        value = rows_data[idx].get(col)
+                        if not is_empty(value) and is_empty(df.at[idx, col]):
+                            df.at[idx, col] = value
                 store_result(idx, result, status)
                 apply_row_to_df(idx, result, status)
                 stats["completed"] += 1
@@ -1171,9 +1394,12 @@ def main():
                     save_excel()
                     print(f"已临时保存到：{OUTPUT_FILE_LOCAL}", flush=True)
 
+            pump_prefetch()
             submit_until_full()
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
+        if fetch_pool is not None:
+            fetch_pool.shutdown()
 
     if stop_event.is_set():
         stats["stopped"] = True
