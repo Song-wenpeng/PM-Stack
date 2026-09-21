@@ -31,7 +31,7 @@ from .app_updater import ApplicationUpdater, launch_updater_helper
 from .widgets import make_button, make_hint_label
 
 
-CURRENT_VERSION = "v1.10.2"
+CURRENT_VERSION = "v1.10.3"
 APP_NAME = "PM Stack"
 APP_TITLE = f"{APP_NAME} {CURRENT_VERSION}"
 

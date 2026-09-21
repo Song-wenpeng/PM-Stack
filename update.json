@@ -1,7 +1,7 @@
 {
-  "version": "1.10.2",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.10.2/PM-Stack.exe",
-  "sha256": "d07cf906a9f2d6329b30cdf680ea54f508d0c48c8609c3c5925aac250ae5efea",
-  "size": 136095616,
-  "notes": "v1.10.2 首次发布"
+  "version": "1.10.3",
+  "url": "PM Stack.exe",
+  "sha256": "1c61483646f790daeea3a4e89670cc8cf4f718f1529be2696b1c65fd7f5bb8c3",
+  "size": 136496797,
+  "notes": "新增：市场规划字段提取支持自动补抓五点描述与主副图（边抓边提取、解耦流水线、默认开启）；评论采集面板支持导出并一键发送到评论分析。"
 }
