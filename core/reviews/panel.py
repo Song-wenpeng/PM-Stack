@@ -15,6 +15,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
 from core.runner import ScriptRunner
 from core.widgets import Card, FileDropLineEdit, LogConsole, configure_combo, make_button
 
+from .analysis_dialog import AnalysisSendDialog, load_product_templates
 from .config import DEFAULT_MARKETPLACE, MARKETPLACES, MAX_REVIEW_PAGES, MAX_REVIEWS_PER_STAR
 from .exporter import export_reviews_for_analysis, fetch_all_reviews
 from .detail_export import export_review_details
@@ -76,7 +78,7 @@ class _TaskThread(QThread):
 class ReviewCollectionPanel(QWidget):
     """A nested submodule hosted by the existing comment-analysis page."""
 
-    analysis_requested = pyqtSignal(str)
+    analysis_requested = pyqtSignal(dict)
 
     def __init__(self, config_mgr, runner, parent=None):
         super().__init__(parent)
@@ -91,6 +93,8 @@ class ReviewCollectionPanel(QWidget):
         self._extension_last_event = None
         self._product_rows = []
         self._review_rows = []
+        self._analysis_dialog = None
+        self._analysis_scope = None
         self._build_ui()
         self._load_cloud_settings()
         self._extension_timer = QTimer(self)
@@ -244,10 +248,10 @@ class ReviewCollectionPanel(QWidget):
         query_btn.clicked.connect(self.refresh_reviews)
         filters.addWidget(query_btn)
         export_btn = make_button("导出 Excel")
-        export_btn.clicked.connect(lambda: self._export_reviews(False))
+        export_btn.clicked.connect(self._export_reviews)
         filters.addWidget(export_btn)
         analyze_btn = make_button("发送到一键分析", "primary")
-        analyze_btn.clicked.connect(lambda: self._export_reviews(True))
+        analyze_btn.clicked.connect(self._send_to_analysis)
         filters.addWidget(analyze_btn)
         review_card.content_layout.addLayout(filters)
 
@@ -736,8 +740,8 @@ class ReviewCollectionPanel(QWidget):
             + review_extra_detail(row),
         )
 
-    def _export_reviews(self, for_analysis: bool):
-        default_name = f"评论分析输入_{datetime.now():%Y%m%d_%H%M%S}.xlsx" if for_analysis else f"评论明细含AI结果_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    def _export_reviews(self):
+        default_name = f"评论明细含AI结果_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
         path, _ = QFileDialog.getSaveFileName(
             self,
             "保存评论分析文件",
@@ -755,7 +759,7 @@ class ReviewCollectionPanel(QWidget):
             repository = ReviewRepository()
             try:
                 rows, source = repository.export_snapshot(**filters)
-                destination = export_reviews_for_analysis(rows, path) if for_analysis else export_review_details(rows, path)
+                destination = export_review_details(rows, path)
                 return destination, len(rows), source
             finally:
                 repository.close()
@@ -763,15 +767,105 @@ class ReviewCollectionPanel(QWidget):
         def done(payload):
             destination, count, source = payload
             self.library_status.setText(f"已从 {source} 导出 {count} 条：{destination}")
-            if for_analysis:
-                self.analysis_requested.emit(destination)
-            else:
-                QMessageBox.information(self, "导出成功", f"已导出 {count} 条评论：\n{destination}")
+            QMessageBox.information(self, "导出成功", f"已导出 {count} 条评论：\n{destination}")
 
         self._start_task(
             "export",
             target,
             done,
+            on_error=lambda message: self.library_status.setText(message),
+        )
+
+    def _send_to_analysis(self):
+        """REV-001：先确认范围与品类模板，再导出并携带选择进入一键分析。"""
+        if "analysis_scope" in self._workers:
+            self.library_status.setText("正在统计发送范围，请稍候再试")
+            return
+        filters = self._current_filters()
+        product = self._selected_product()
+        templates = load_product_templates(self.config_mgr)
+        dialog = AnalysisSendDialog(self, filters, product, templates)
+        self._analysis_dialog = dialog
+
+        def target(_log):
+            repository = ReviewRepository()
+            try:
+                rows, source = repository.export_snapshot(**filters)
+                return rows, source, repository.cloud_error
+            finally:
+                repository.close()
+
+        def done(payload):
+            rows, source, cloud_error = payload
+            asins = sorted({str(r.get("asin") or "") for r in rows} - {""})
+            marketplaces = sorted({str(r.get("marketplace") or "") for r in rows} - {""})
+            self._analysis_scope = {
+                "rows": rows,
+                "source": source,
+                "filters": filters,
+                "asins": asins,
+                "marketplaces": marketplaces,
+            }
+            if self._analysis_dialog is dialog:
+                dialog.set_scope(len(rows), asins, marketplaces, source, cloud_error)
+
+        self._start_task(
+            "analysis_scope",
+            target,
+            done,
+            on_error=lambda message: (
+                dialog.set_error(message) if self._analysis_dialog is dialog else None
+            ),
+        )
+
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._analysis_dialog = None
+        if not accepted:
+            self.library_status.setText("已取消发送，未生成分析任务")
+            return
+        key, display, fingerprint = dialog.selection()
+        scope = self._analysis_scope or {}
+        rows = scope.get("rows") or []
+        if not rows:
+            QMessageBox.warning(self, "无法发送", "当前范围没有匹配评论。")
+            return
+
+        default_name = f"评论分析输入_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存评论分析文件",
+            str(EXPORT_DIR / default_name),
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            self.library_status.setText("已取消保存，未生成分析任务")
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        self.library_status.setText("正在导出全部匹配评论…")
+
+        def export_target(_log):
+            return export_reviews_for_analysis(rows, path)
+
+        def export_done(destination):
+            payload = {
+                "path": destination,
+                "product_key": key,
+                "product_display": display,
+                "fingerprint": fingerprint,
+                "review_count": len(rows),
+                "source": scope.get("source", ""),
+                "filters": filters,
+                "asins": scope.get("asins", []),
+                "marketplaces": scope.get("marketplaces", []),
+            }
+            self.library_status.setText(f"已发送 {len(rows)} 条评论到分析：{destination}")
+            self.analysis_requested.emit(payload)
+
+        self._start_task(
+            "export",
+            export_target,
+            export_done,
             on_error=lambda message: self.library_status.setText(message),
         )
 

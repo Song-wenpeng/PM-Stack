@@ -21,6 +21,7 @@ from core.widgets import (
     browse_file, browse_save_file, browse_dir,
 )
 from core.reviews.panel import ReviewCollectionPanel
+from core.reviews.analysis_dialog import check_template_fingerprint, load_product_templates
 
 MODULE_INFO = {
     "name": "评论分析",
@@ -38,6 +39,7 @@ class ModuleWidget(QWidget):
         self.runner = runner
         self._stop_file = os.path.join(tempfile.gettempdir(), "comment_stop.signal")
         self._stopped = False
+        self._s12_confirmation = None
         self._init_ui()
 
     def _init_ui(self):
@@ -155,6 +157,7 @@ class ModuleWidget(QWidget):
         form3.addRow("输入文件:", file_row(self.s12_input, "open", parent=self))
 
         self.s12_product = configure_combo(QComboBox())
+        self.s12_product.currentIndexChanged.connect(self._s12_product_changed)
         form3.addRow("分析品类:", self.s12_product)
 
         self.s12_sheets = QLineEdit()
@@ -233,16 +236,43 @@ class ModuleWidget(QWidget):
 
     # ---- 小工具 ----
 
-    def _use_collected_review_file(self, path):
-        """Receive a compatible workbook exported from the review library."""
+    def _use_collected_review_file(self, payload):
+        """Receive the review-library export together with the confirmed template choice."""
+        path = payload["path"]
+        key = payload["product_key"]
         self.s12_input.setText(path)
         self.s12_sheets.clear()
         self.tabs.setCurrentWidget(self.tabs.widget(3))
         self.log_s12.clear()
+        self._s12_confirmation = None
+
+        keys = [self.s12_product.itemData(i) for i in range(self.s12_product.count())]
+        index = keys.index(key) if key in keys else -1
+        self.s12_product.blockSignals(True)
+        self.s12_product.setCurrentIndex(max(index, 0))
+        self.s12_product.blockSignals(False)
+        if index < 0:
+            self.log_s12.append(
+                f"[错误] 已确认的品类模板（key={key}）在当前配置中不存在，可能已被删除或配置已更换。\n"
+                "请重新选择品类，或回到评论库重新发送。本次不会自动开始分析。"
+            )
+            self.log_s12.set_status("error")
+            return
+
+        self._s12_confirmation = {"key": key, "fingerprint": payload.get("fingerprint")}
+        asins = payload.get("asins") or []
+        scope_text = ", ".join(asins[:5])
+        if len(asins) > 5:
+            scope_text += f" 等 {len(asins)} 个 ASIN"
         self.log_s12.append(
-            f"[已就绪] 已载入评论库导出文件：\n{path}\n"
-            "请选择分析品类，然后点击“一键完成分析”。"
+            f"[已就绪] 已载入评论库导出文件（{payload.get('review_count', '?')} 条，"
+            f"来源：{payload.get('source', '')}；ASIN：{scope_text or '整个工作区'}）：\n{path}\n"
+            f"已确认分析品类：{payload.get('product_display', key)}（模板指纹 {payload.get('fingerprint', '')}）\n"
+            "请核对后点击“一键完成分析”。"
         )
+
+    def _s12_product_changed(self, _index):
+        self._s12_confirmation = None
 
     @staticmethod
     def _auto_output(input_edit, output_edit, suffix):
@@ -449,6 +479,22 @@ class ModuleWidget(QWidget):
         if not prod:
             self.log_s12.setPlainText("请先选择分析品类。")
             return
+
+        confirmation = self._s12_confirmation
+        if confirmation and confirmation.get("key") == prod:
+            templates = load_product_templates(self.config_mgr)
+            ok, reason = check_template_fingerprint(prod, confirmation.get("fingerprint"), templates)
+            if not ok:
+                self._s12_confirmation = None
+                self.log_s12.setPlainText(
+                    f"[错误] {reason}。\n请回到评论库重新发送并确认，或手动重新选择品类后再运行。"
+                )
+                self.log_s12.set_status("error")
+                return
+            self.log_s12.append(
+                f"使用已确认品类模板：{self.s12_product.currentText()}（指纹 {confirmation.get('fingerprint')}）"
+            )
+        self._s12_confirmation = None
 
         p = Path(inp)
         out_dir = str(p.parent)
