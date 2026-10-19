@@ -1,5 +1,6 @@
 """Controls for importing a local review workbook into the common collection UI."""
 import json
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QFileDialog
 from core.widgets import FileDropLineEdit, make_button, configure_combo
 
@@ -17,7 +18,7 @@ class ExcelImportOptions(QWidget):
         layout.addLayout(row)
         options=QHBoxLayout()
         self.ai=QCheckBox("导入后提取标签")
-        self.ai.setChecked(True)
+        self.ai.setChecked(False)
         options.addWidget(self.ai)
         self.category=configure_combo(QComboBox())
         self.configs={}
@@ -31,11 +32,16 @@ class ExcelImportOptions(QWidget):
         except (OSError,ValueError,TypeError):
             self.category.addItem("请在设置中配置品类模板","")
         options.addWidget(self.category,1)
-        self.sync=QCheckBox("完成后同步云端")
-        self.sync.setChecked(True)
-        options.addWidget(self.sync)
-        layout.addLayout(options)
-        hint=QLabel("读取“内容”原文；保留评论链接、变体和来源。相同评论自动去重，相同模板标签自动复用。")
+        advanced = QWidget()
+        advanced.setLayout(options)
+        advanced.hide()
+        more = make_button("导入选项", "ghost")
+        more.setCheckable(True)
+        more.toggled.connect(advanced.setVisible)
+        more.toggled.connect(lambda checked: more.setText("收起导入选项" if checked else "导入选项"))
+        layout.addWidget(more, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(advanced)
+        hint=QLabel("保留评论原文、链接和变体信息，相同评论自动去重。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 

@@ -1,6 +1,7 @@
 """Regression coverage for failed UI construction and test-process isolation."""
 
 from tests import support
+from core.config_manager import ConfigManager
 
 import gc
 import os
@@ -41,14 +42,14 @@ class TestRuntimeTests(unittest.TestCase):
     def test_constructor_failure_then_next_window_is_safe(self):
         identity = id(support.qt_app())
         for _ in range(3):
-            with patch.object(ReviewCollectionPanel, "_load_cloud_settings",
+            with patch.object(ReviewCollectionPanel, "_load_backup_settings",
                               side_effect=RuntimeError("simulated database unavailable")):
                 with self.assertRaisesRegex(RuntimeError, "simulated database"):
-                    ReviewCollectionPanel(Mock(), Mock())
+                    ReviewCollectionPanel(ConfigManager(str(support.DATA_ROOT / "backup-ui-config.json")), Mock())
             support.cleanup_qt_widgets()
             gc.collect()
             self.assertEqual(id(support.qt_app()), identity)
-            with patch.object(ReviewCollectionPanel, "_load_cloud_settings"):
-                panel = ReviewCollectionPanel(Mock(), Mock())
+            with patch.object(ReviewCollectionPanel, "_load_backup_settings"):
+                panel = ReviewCollectionPanel(ConfigManager(str(support.DATA_ROOT / "backup-ui-config.json")), Mock())
             support.cleanup_qt_widgets()
             self.assertTrue(sip.isdeleted(panel))

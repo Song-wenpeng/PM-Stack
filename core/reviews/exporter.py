@@ -52,7 +52,7 @@ def fetch_all_reviews(
 
 
 def export_reviews_for_analysis(rows: Iterable[Dict[str, Any]], output_path: str) -> str:
-    """Write Chinese headers and star sheets expected by comments_step_1.py."""
+    """Write Chinese headers and star sheets expected by comments_step_1_fast.py."""
     items = list(rows)
     if not items:
         raise ValueError("没有可导出的评论")

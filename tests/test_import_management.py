@@ -25,8 +25,6 @@ class ImportManagementTests(fixture.ExcelImportTests):
         self.assertEqual(self.store.query_reviews(asin=fixture.ASIN),[])
         rows=self.store.query_reviews(asin="B0FB2SFD5X")
         self.assertEqual(len(rows),1);self.assertIsNotNone(latest_analysis(rows[0]))
-        for row in self.store.pending_outbox(100):
-            self.assertNotEqual(json.loads(row["payload_json"])["product"]["asin"],fixture.ASIN)
         self.assertEqual(batches(self.store)[0]["asin"],"B0FB2SFD5X")
         self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM import_corrections").fetchone()[0],1)
 
@@ -51,14 +49,6 @@ class ImportManagementTests(fixture.ExcelImportTests):
         self.assertEqual(result["retained"],1)
         self.assertEqual(len(self.store.query_reviews()),1)
 
-    def test_synced_and_cloud_configured_are_blocked(self):
-        data=self.data();import_reviews(self.store,data)
-        batch=batches(self.store)[0]
-        with patch("core.reviews.import_management.SupabaseStore.is_configured",return_value=True):
-            with self.assertRaises(ValueError):change_batch(self.store,batch)
-        self.store.conn.execute("UPDATE outbox SET status='synced'");self.store.conn.commit()
-        with self.assertRaises(ValueError):change_batch(self.store,batch)
-        self.assertEqual(len(self.store.query_reviews()),1)
 
     def test_remove_only_association_keeps_recoverable_raw(self):
         data=self.data();import_reviews(self.store,data)
@@ -66,7 +56,7 @@ class ImportManagementTests(fixture.ExcelImportTests):
         self.assertEqual(result["removed"],1)
         self.assertEqual(self.store.query_reviews(),[])
         self.assertEqual(self.store.total_reviews(),1)
-        self.assertEqual(self.store.outbox_stats()["pending"],0)
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0],0)
 
     def test_failure_rolls_back_links_metadata_and_queue(self):
         import uuid

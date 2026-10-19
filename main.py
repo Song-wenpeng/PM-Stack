@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""PM Stack V1.10.2 — 内置评论分析并发测试子模块"""
+"""PM Stack v1.10.20 — 字段提取断点补缺修复"""
 
 import sys
 import os
@@ -24,8 +24,28 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))
+    from core.config_manager import ConfigManager
+    from core.reviews.backup import BackupManager
+    from PyQt6.QtCore import QLockFile
+    from PyQt6.QtWidgets import QMessageBox
+    config = ConfigManager()
+    session_lock = QLockFile(os.path.join(os.path.dirname(config.get_path()), 'pmstack-session.lock'))
+    session_lock.setStaleLockTime(0)
+    os.makedirs(os.path.dirname(config.get_path()), exist_ok=True)
+    if not session_lock.tryLock(0):
+        QMessageBox.information(None, 'PM Stack 已运行', '请先关闭其他 PM Stack 窗口，再启动软件。')
+        return
+    try:
+        BackupManager(config).apply_pending()
+    except Exception as exc:
+        QMessageBox.warning(None, '本地备份恢复失败', f'恢复未完成，继续使用原数据。可在数据与备份中取消待恢复。\n{exc}')
     # 主题 QSS 由 MainWindow 按配置应用（明/暗双主题）
     window = MainWindow()
+    if '--sales-split-check' in sys.argv:
+        from core.sales_smoke import check_sales_split
+        check_sales_split(window, sys.argv[sys.argv.index('--sales-split-check') + 1])
+        window.close()
+        return
     if '--review-backend-check' in sys.argv:
         import json
         import tempfile
@@ -91,8 +111,21 @@ def main():
             if hasattr(module, 'review_collection'):
                 combo = module.review_collection.excel_options.category
                 categories['excel_import'] = [combo.itemData(i) for i in range(combo.count())]
+        comments = next(module for _, module in window._modules if hasattr(module, 'review_collection'))
+        review_tabs = [comments.tabs.tabText(i) for i in range(comments.tabs.count())]
+        assert review_tabs == ['开始分析', '评论库', '分析记录']
+        assert comments.tabs.currentWidget() is comments.start_tab
+        assert comments.product_combo.findData('general') >= 0
+        from core.reviews.prompt_editor import PromptEditorDialog
+        editor = PromptEditorDialog(window.config_mgr, comments, 'general')
+        assert editor.system.toPlainText() and editor.tasks.toPlainText()
+        assert '用户评论：' in editor.preview.toPlainText()
+        editor.close()
         Path(target).write_text(json.dumps({'startup': 'ok', 'matrix_preview': 'ok',
-                                            'review_categories': categories}), encoding='utf-8')
+                                            'review_categories': categories,
+                                            'app_version': window.windowTitle(), 'prompt_editor': 'ok',
+                                            'review_workflow': {'tabs': review_tabs, 'default': '开始分析',
+                                                                'persistent_history': True}}, ensure_ascii=False), encoding='utf-8')
         window.close()
         return
     window.show()

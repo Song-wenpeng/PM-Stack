@@ -1,7 +1,6 @@
-"""SQLite 离线缓存与 Supabase outbox。
+"""SQLite 本地业务数据库。
 
-Supabase 是业务主库；SQLite 只负责抓取期间落盘、离线查询缓存、可重试
-同步队列，以及本机设置和恢复令牌。
+本地保存评论、关联、标签、采集历史和设置。旧 outbox 仅作历史兼容保留。
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ SCHEMA_VERSION = 3
 
 
 class ReviewStore:
-    """本地缓存和可靠 outbox；不再作为最终业务数据源。"""
+    """本地业务数据主库。"""
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or DEFAULT_DB_PATH
@@ -170,6 +169,11 @@ class ReviewStore:
             CREATE INDEX IF NOT EXISTS idx_outbox_pending
                 ON outbox(status, next_retry_at, id);
 
+            CREATE TABLE IF NOT EXISTS collection_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -429,7 +433,7 @@ class ReviewStore:
         self.conn.commit()
         return new_count, duplicate_count
 
-    def enqueue_collection(
+    def record_collection(
         self,
         asin: str,
         marketplace: str,
@@ -460,102 +464,12 @@ class ReviewStore:
             "reviews": normalized,
             "run": run or {},
         }
-        review_ids = sorted(item["review_id"] for item in normalized)
-        basis = json_dumps(
-            {
-                "marketplace": marketplace,
-                "asin": asin,
-                "review_ids": review_ids,
-                "started_at": (run or {}).get("started_at", ""),
-            }
-        )
-        key = hashlib.sha256(basis.encode("utf-8")).hexdigest()
-        now = utc_now()
-        self.conn.execute(
-            """
-            INSERT INTO outbox
-                (idempotency_key, entity_type, payload_json, status, created_at, updated_at)
-            VALUES (?, 'review_batch', ?, 'pending', ?, ?)
-            ON CONFLICT(idempotency_key) DO NOTHING
-            """,
-            (key, json_dumps(payload), now, now),
-        )
-        row = self.conn.execute(
-            "SELECT id FROM outbox WHERE idempotency_key=?", (key,)
-        ).fetchone()
-        self.conn.commit()
-        return row["id"] if row else None
-
-    def pending_outbox(self, limit: int = 20, *, include_deferred: bool = False, max_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        now = utc_now()
-        lease_cutoff = datetime.fromtimestamp(
-            datetime.now(timezone.utc).timestamp() - 300, timezone.utc
-        ).isoformat(timespec="seconds")
-        self.conn.execute(
-            """UPDATE outbox SET status='pending', updated_at=?
-               WHERE status='syncing' AND updated_at <= ?""",
-            (now, lease_cutoff),
-        )
-        retry_clause = "" if include_deferred else "AND (next_retry_at IS NULL OR next_retry_at <= ?)"
-        params: List[Any] = []
-        if not include_deferred:
-            params.append(now)
-        if max_id is not None:
-            retry_clause += " AND id <= ?"
-            params.append(max_id)
-        params.append(max(1, int(limit)))
-        rows = self.conn.execute(
-            f"""
-            SELECT * FROM outbox
-            WHERE status IN ('pending', 'failed')
-              {retry_clause}
-            ORDER BY id LIMIT ?
-            """,
-            params,
-        ).fetchall()
-        self.conn.commit()
-        return [dict(row) for row in rows]
-
-    def mark_outbox_syncing(self, outbox_id: int) -> None:
-        self.conn.execute(
-            "UPDATE outbox SET status='syncing', updated_at=? WHERE id=?",
-            (utc_now(), outbox_id),
+        cursor = self.conn.execute(
+            "INSERT INTO collection_events(payload_json,created_at) VALUES(?,?)",
+            (json_dumps(payload), utc_now()),
         )
         self.conn.commit()
-
-    def mark_outbox_synced(self, outbox_id: int) -> None:
-        now = utc_now()
-        self.conn.execute(
-            "UPDATE outbox SET status='synced', last_error='', synced_at=?, updated_at=? WHERE id=?",
-            (now, now, outbox_id),
-        )
-        self.conn.commit()
-
-    def mark_outbox_failed(self, outbox_id: int, error: str) -> None:
-        now = datetime.now(timezone.utc)
-        row = self.conn.execute("SELECT retry_count FROM outbox WHERE id=?", (outbox_id,)).fetchone()
-        retry_count = (row["retry_count"] if row else 0) + 1
-        delay_seconds = min(3600, 60 * (2 ** min(retry_count - 1, 6)))
-        next_retry = datetime.fromtimestamp(now.timestamp() + delay_seconds, timezone.utc)
-        self.conn.execute(
-            """
-            UPDATE outbox SET status='failed', retry_count=?, last_error=?,
-                next_retry_at=?, updated_at=? WHERE id=?
-            """,
-            (
-                retry_count, str(error)[:2000], next_retry.isoformat(timespec="seconds"),
-                now.isoformat(timespec="seconds"), outbox_id,
-            ),
-        )
-        self.conn.commit()
-
-    def outbox_stats(self) -> Dict[str, int]:
-        rows = self.conn.execute(
-            "SELECT status, COUNT(*) AS c FROM outbox GROUP BY status"
-        ).fetchall()
-        result = {"pending": 0, "syncing": 0, "synced": 0, "failed": 0}
-        result.update({row["status"]: row["c"] for row in rows})
-        return result
+        return cursor.lastrowid
 
     def log_run(
         self,

@@ -67,9 +67,7 @@ def collect_product(
         try:
             store.upsert_product(asin, marketplace)
             store.log_run(asin, marketplace, 0, 0, "failed", str(exc), started)
-            store.enqueue_collection(asin, marketplace, "", [], run=run)
-            if repository:
-                repository.sync_pending()
+            store.record_collection(asin, marketplace, "", [], run=run)
         except Exception as record_error:
             _log(log_callback, f"[警告] 保存或同步失败记录时出错：{record_error}")
         raise
@@ -106,7 +104,7 @@ def collect_product(
         error=error,
         started_at=started,
     )
-    store.enqueue_collection(
+    store.record_collection(
         asin,
         marketplace,
         title,
@@ -118,13 +116,6 @@ def collect_product(
 
     for warning in warnings:
         _log(log_callback, f"[部分成功] {warning}")
-    if repository:
-        sync = repository.sync_pending()
-        if sync["synced"]:
-            _log(log_callback, f"[云同步] 已提交 {sync['synced']} 个批次")
-        if sync["error"]:
-            _log(log_callback, f"[离线队列] {sync['error']}")
-
     _log(
         log_callback,
         f"[入库] {asin}: 抓取 {len(normalized)} 条，新增 {new_count} 条，已存在 {duplicate_count} 条",

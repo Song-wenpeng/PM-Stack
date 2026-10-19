@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
+from core.field_row_filter import select_field_rows
+from core.field_workbook import FieldWorkbookWriter
+from core.field_values import is_empty_field as is_empty
 import time
 import os
 import json
@@ -35,10 +38,7 @@ INPUT_FILE = os.getenv(
     "INPUT_FILE",
     r"C:/Users/QJH/WPSDrive/311520967/WPS云盘/联动排插_US/联动排插_数据.xlsx",
 )
-OUTPUT_FILE = os.getenv(
-    "OUTPUT_FILE",
-    r"C:/Users/QJH/WPSDrive/311520967/WPS云盘/联动排插_US/联动排插_数据_打标.xlsx",
-)
+OUTPUT_FILE = os.getenv("OUTPUT_FILE") or INPUT_FILE
 
 CONFIG_FILE = os.getenv("CONFIG_FILE", os.path.join(SCRIPT_DIR, "product_field_config.json"))
 CURRENT_PRODUCT = os.getenv("CURRENT_PRODUCT", "vacuum auto switch")
@@ -104,6 +104,9 @@ def load_product_config(config_file, product_name=None):
 
     with open(config_file, "r", encoding="utf-8") as f:
         config = json.load(f)
+    snapshot = os.getenv('PRODUCT_CONFIG_SNAPSHOT', '')
+    if snapshot:
+        config = json.loads(snapshot)
 
     if not product_name:
         product_name = config.get("current_product")
@@ -124,7 +127,8 @@ def load_product_config(config_file, product_name=None):
     if missing_keys:
         raise ValueError(f"产品配置缺少必要字段：{missing_keys}")
 
-    return product_name, product_config
+    from core.field_templates import with_output_rules
+    return product_name, with_output_rules(product_config)
 
 
 CURRENT_PRODUCT, PRODUCT_CONFIG = load_product_config(CONFIG_FILE, CURRENT_PRODUCT)
@@ -163,30 +167,6 @@ def ask_enable_vision():
             return False
 
         print("输入无效，请输入 y 或 n。")
-
-
-def is_empty(value):
-    if value is None:
-        return True
-
-    try:
-        if pd.isna(value):
-            return True
-    except Exception:
-        pass
-
-    value_str = str(value).strip()
-
-    if value_str == "":
-        return True
-
-    if value_str.lower() in ["nan", "none", "null", "n/a", "na"]:
-        return True
-
-    if value_str in ["未找到", "无", "空", "未知", "未说明"]:
-        return True
-
-    return False
 
 
 def clean_value(value):
@@ -434,7 +414,7 @@ def extract_text_features(row, missing_fields=None, max_retries=3):
 5. JSON 的 key 必须严格使用以下字段名：
 {missing_fields}
 6. 只输出 JSON，不要输出解释、分析、Markdown 代码块。
-7. 字段值尽量使用中文表述；规格数值、单位、型号可以保留原文。
+7. 优先遵循各字段的输出语言与格式要求；未指定时尽量使用中文，规格数值、单位、型号保留原文。不进行单位换算。
 """
 
     last_error = None
@@ -615,12 +595,19 @@ def main():
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
+    writer = FieldWorkbookWriter(INPUT_FILE, OUTPUT_FILE, TARGET_FIELDS)
     if RESUME_FROM_OUTPUT and os.path.exists(OUTPUT_FILE):
         print(f"检测到已存在输出文件，将从 {OUTPUT_FILE} 继续处理。")
-        df = pd.read_excel(OUTPUT_FILE)
+        df = pd.read_excel(OUTPUT_FILE, dtype=object)
     else:
         print(f"读取原始文件：{INPUT_FILE}")
-        df = pd.read_excel(INPUT_FILE)
+        df = pd.read_excel(INPUT_FILE, dtype=object)
+    selected_indices, row_filter = select_field_rows(df)
+    if not selected_indices:
+        print('[提示] 没有匹配的行，未执行提取，文件未修改。', flush=True)
+        return
+    selected_set = set(selected_indices)
+    writer.restore_logs(df)
 
     missing_text_cols = [col for col in TEXT_COLS if col not in df.columns]
 
@@ -639,6 +626,8 @@ def main():
     print(f"图片批量大小：{VISION_BATCH_SIZE}")
 
     for index, row in tqdm(df.iterrows(), total=len(df), desc="AI处理进度"):
+        if index not in selected_set:
+            continue
         already_done = True
 
         for field in TARGET_FIELDS:
@@ -760,10 +749,11 @@ def main():
         df.at[index, "图片识别批次日志"] = json.dumps(vision_batch_logs, ensure_ascii=False)
         df.at[index, "最终缺失字段"] = "；".join(final_missing_fields)
         df.at[index, "提取完整状态"] = "是" if not final_missing_fields else "否"
+        df.at[index, "_处理状态"] = ""
 
         if (index + 1) % SAVE_EVERY == 0:
             os.makedirs(os.path.dirname(OUTPUT_FILE) or ".", exist_ok=True)
-            df.to_excel(OUTPUT_FILE, index=False)
+            writer.save(df.loc[selected_indices])
             print(f"\n已临时保存到：{OUTPUT_FILE}")
 
         time.sleep(0.3)
@@ -772,10 +762,12 @@ def main():
         if STOP_FILE and os.path.exists(STOP_FILE):
             os.remove(STOP_FILE)
             print(f"\n[停止] 收到停止信号，保存已处理数据后退出。")
+            for pending_index in [i for i in selected_indices if i > index]:
+                df.at[pending_index, "_处理状态"] = "已停止"
             break
 
     os.makedirs(os.path.dirname(OUTPUT_FILE) or ".", exist_ok=True)
-    df.to_excel(OUTPUT_FILE, index=False)
+    writer.save(df.loc[selected_indices])
     print(f"\n处理完成！结果已保存至：{OUTPUT_FILE}")
 
 

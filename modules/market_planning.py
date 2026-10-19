@@ -8,14 +8,19 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QFormLayout, QLineEdit,
     QHBoxLayout, QFileDialog, QLabel, QComboBox, QCheckBox, QScrollArea,
     QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QAbstractItemView, QSpinBox,
+    QAbstractItemView, QSpinBox, QSplitter,
 )
 from PyQt6.QtCore import Qt
+from modules.field_template_panel import FieldTemplatePanel
+from core.excel_choices import ChoiceEdit, ExcelChoices
 
 from core.widgets import (
     Card, LogConsole, FileDropLineEdit, make_button, configure_combo,
     file_row, set_running_state, make_hint_label,
 )
+
+from core.task_ui import register_form, pin_actions, validated, mark_required, advanced_rows
+from core.widgets import ScrollTabs, collapsible_log
 
 MODULE_INFO = {
     "name": "市场规划",
@@ -211,6 +216,7 @@ class FieldEditorDialog(QDialog):
 class ModuleWidget(QWidget):
     def __init__(self, config_mgr, runner):
         super().__init__()
+        self.setProperty("workspacePage", True)
         self.config_mgr = config_mgr
         self.runner = runner
         self._field_cbs = []
@@ -231,11 +237,24 @@ class ModuleWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 20, 28, 24)
         layout.setSpacing(14)
-        tabs = QTabWidget()
+        tabs = ScrollTabs()
 
         # ================= Tab 1: 字段提取 =================
         tab1 = QWidget()
-        t1 = QVBoxLayout(tab1)
+        tab1.setProperty("workspacePage", True)
+        tab1_layout = QHBoxLayout(tab1)
+        tab1_layout.setContentsMargins(0, 0, 0, 0)
+        self.field_splitter = QSplitter(Qt.Orientation.Horizontal)
+        tab1_layout.addWidget(self.field_splitter)
+        field_left = QWidget()
+        self.field_splitter.addWidget(field_left)
+        self.template_panel = FieldTemplatePanel(self._get_config_path())
+        self.template_panel.saved.connect(self._template_saved)
+        self.field_splitter.addWidget(self.template_panel)
+        self.field_splitter.setStretchFactor(0, 2)
+        self.field_splitter.setStretchFactor(1, 1)
+        self.template_panel.hide()
+        t1 = QVBoxLayout(field_left)
         t1.setContentsMargins(0, 0, 0, 0)
         t1.setSpacing(14)
 
@@ -247,8 +266,9 @@ class ModuleWidget(QWidget):
         self.tag_input = FileDropLineEdit(placeholder="选择或拖入商品数据 Excel 文件")
         form1.addRow("输入文件:", file_row(self.tag_input, "open", parent=self))
 
-        self.tag_output = FileDropLineEdit(placeholder="留空则使用默认输出路径")
+        self.tag_output = FileDropLineEdit(placeholder="留空写回源文件；填写路径则另存副本")
         form1.addRow("输出文件:", file_row(self.tag_output, "save", parent=self))
+        form1.addRow(QLabel("结果列放在 ASIN 后；过程信息写入“字段提取日志”。写回前自动备份，请关闭 Excel/WPS。"))
 
         self.tag_combo = configure_combo(QComboBox())
         self.tag_combo.setMinimumWidth(200)
@@ -271,8 +291,10 @@ class ModuleWidget(QWidget):
         # 字段勾选区
         self._field_scroll = QScrollArea()
         self._field_scroll.setWidgetResizable(True)
-        self._field_scroll.setMaximumHeight(130)
+        self._field_scroll.setMinimumHeight(170)
+        self._field_scroll.setMaximumHeight(220)
         self._field_container = QWidget()
+        self._field_container.setObjectName("FieldGroup")
         self._field_layout = QVBoxLayout(self._field_container)
         self._field_layout.setContentsMargins(4, 4, 4, 4)
         self._field_layout.setSpacing(4)
@@ -285,10 +307,32 @@ class ModuleWidget(QWidget):
         sel_all.clicked.connect(lambda: self._set_all_fields(True))
         sel_none = make_button("全不选", "compact")
         sel_none.clicked.connect(lambda: self._set_all_fields(False))
-        sel_row.addStretch()
+        self.field_search = QLineEdit()
+        self.field_search.setPlaceholderText('搜索提取字段')
+        self.field_search.textChanged.connect(self._filter_fields)
+        sel_row.addWidget(self.field_search, 1)
+        self.field_count = make_hint_label('')
+        sel_row.addWidget(self.field_count)
         sel_row.addWidget(sel_all)
         sel_row.addWidget(sel_none)
         form1.addRow(sel_row)
+
+        self.tag_filter_cb = QCheckBox('仅提取指定标签的行（默认所有行）')
+        form1.addRow('提取范围:', self.tag_filter_cb)
+        self.tag_filter_column = ChoiceEdit('打标')
+        self.tag_filter_column.setPlaceholderText('选择或输入标签列名')
+        self.tag_filter_value = QLineEdit('1')
+        self.tag_filter_value.setPlaceholderText('填写要匹配的标签值，如 1')
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(self.tag_filter_column, 1)
+        filter_row.addWidget(QLabel('等于'))
+        filter_row.addWidget(self.tag_filter_value, 1)
+        form1.addRow('标签条件:', filter_row)
+        for control in (self.tag_filter_column, self.tag_filter_value):
+            control.setEnabled(False)
+            self.tag_filter_cb.toggled.connect(control.setEnabled)
+        self.tag_filter_choices = ExcelChoices(
+            self.tag_input, [], [(self.tag_filter_column, None)], parent=self)
 
         self.vision_cb = QCheckBox("启用图片识别（需要配置视觉模型）")
         self.vision_cb.setChecked(True)
@@ -329,12 +373,20 @@ class ModuleWidget(QWidget):
         self.stop_btn1.clicked.connect(self._stop_extraction)
         btn_row1.addWidget(self.run_btn1)
         btn_row1.addWidget(self.stop_btn1)
-        form1.addRow(btn_row1)
+        register_form(form1)
+        advanced_rows(form1, 8, 10, '图片识别、自动补抓与并发')
+        self.extract_options_hint = make_hint_label('')
+        form1.addRow(self.extract_options_hint)
+        for option in (self.vision_cb, self.fetch_cb, self.fast_cb):
+            option.toggled.connect(self._update_extract_options)
+        self.concurrency_spin.valueChanged.connect(self._update_extract_options)
+        self._update_extract_options()
         card1.content_layout.addLayout(form1)
         t1.addWidget(card1)
         self.log1 = LogConsole()
-        t1.addWidget(self.log1)
+        collapsible_log(t1, self.log1)
         t1.addStretch()
+        self.field_splitter.insertWidget(0, pin_actions(field_left, self.run_btn1, self.stop_btn1))
         tabs.addTab(tab1, "字段提取")
 
         self._refresh_field_cbs()
@@ -358,13 +410,13 @@ class ModuleWidget(QWidget):
 
         self.run_btn2 = make_button("计算得分", "primary")
         self.run_btn2.clicked.connect(self._run_scoring)
-        form2.addRow(self.run_btn2)
+        register_form(form2)
         card2.content_layout.addLayout(form2)
         t2.addWidget(card2)
         self.log2 = LogConsole()
-        t2.addWidget(self.log2)
+        collapsible_log(t2, self.log2)
         t2.addStretch()
-        tabs.addTab(tab2, "机会得分")
+        tabs.addTab(pin_actions(tab2, self.run_btn2), "机会得分")
 
         # ================= Tab 3: 类目筛选 =================
         tab3 = QWidget()
@@ -385,13 +437,13 @@ class ModuleWidget(QWidget):
 
         self.run_btn3 = make_button("执行 AI 筛选", "primary")
         self.run_btn3.clicked.connect(self._run_category)
-        form3.addRow(self.run_btn3)
+        register_form(form3)
         card3.content_layout.addLayout(form3)
         t3.addWidget(card3)
         self.log3 = LogConsole()
-        t3.addWidget(self.log3)
+        collapsible_log(t3, self.log3)
         t3.addStretch()
-        tabs.addTab(tab3, "类目筛选")
+        tabs.addTab(pin_actions(tab3, self.run_btn3), "类目筛选")
 
         # ================= Tab 4: 数据进度 =================
         tab4 = QWidget()
@@ -418,15 +470,42 @@ class ModuleWidget(QWidget):
 
         self.run_btn4 = make_button("检查进度", "primary")
         self.run_btn4.clicked.connect(self._run_progress)
-        form4.addRow(self.run_btn4)
+        register_form(form4)
         card4.content_layout.addLayout(form4)
         t4.addWidget(card4)
         self.log4 = LogConsole()
-        t4.addWidget(self.log4)
+        collapsible_log(t4, self.log4)
         t4.addStretch()
-        tabs.addTab(tab4, "数据进度")
+        tabs.addTab(pin_actions(tab4, self.run_btn4), "数据进度")
 
+        for field in (self.tag_input, self.score_dir, self.cat_input, self.progress_ids, self.progress_dir):
+            mark_required(field)
+        self._result_sources = {
+            self.run_btn1: lambda: ([self.tag_output.text() or self.tag_input.text()], os.path.dirname(self.tag_input.text())),
+            self.run_btn2: lambda: ([self.score_output.text()], self.score_dir.text()),
+            self.run_btn3: lambda: ([self.cat_output.text()], os.path.dirname(self.cat_input.text())),
+            self.run_btn4: lambda: ([], self.progress_dir.text()),
+        }
         layout.addWidget(tabs)
+
+    def _update_extract_options(self, *_):
+        self.extract_options_hint.setText(
+            f'图片识别：{"开启" if self.vision_cb.isChecked() else "关闭"} · '
+            f'自动补抓：{"开启" if self.fetch_cb.isChecked() else "关闭"} · '
+            f'并发：{self.concurrency_spin.value() if self.fast_cb.isChecked() or self.fetch_cb.isChecked() else 1}')
+
+    def _filter_fields(self, *_):
+        query = self.field_search.text().strip().casefold()
+        for cb in self._field_cbs:
+            cb.setVisible(not query or query in cb.text().casefold())
+        for i in range(self._field_layout.count()):
+            row = self._field_layout.itemAt(i).widget()
+            if row is not None:
+                row.setVisible(any(not cb.isHidden() for cb in row.findChildren(QCheckBox)))
+        self._update_field_summary()
+
+    def _update_field_summary(self, *_):
+        self.field_count.setText(f'已选 {sum(cb.isChecked() for cb in self._field_cbs)} / {len(self._field_cbs)} 项')
 
     # ---- 字段复选框管理 ----
 
@@ -435,10 +514,18 @@ class ModuleWidget(QWidget):
         self.tag_combo.clear()
         products = self._load_products()
         for key, info in products.items():
-            self.tag_combo.addItem(f"{info.get('name', key)} ({key})", key)
+            self.tag_combo.addItem(info.get('name', key), key)
         self.tag_combo.blockSignals(False)
 
     def _on_combo_changed(self):
+        key = self.tag_combo.currentData()
+        if self.template_panel.isVisible():
+            if not self.template_panel.open_product(key):
+                self.tag_combo.blockSignals(True)
+                self.tag_combo.setCurrentIndex(self.tag_combo.findData(self._selected_product))
+                self.tag_combo.blockSignals(False)
+                return
+        self._selected_product = key
         self._refresh_field_cbs()
 
     def _refresh_field_cbs(self):
@@ -456,6 +543,7 @@ class ModuleWidget(QWidget):
                 w.deleteLater()
 
         key = self.tag_combo.currentData()
+        self._selected_product = key
         if not key:
             return
         products = self._load_products()
@@ -467,6 +555,7 @@ class ModuleWidget(QWidget):
         for i, field in enumerate(fields):
             if i % 3 == 0:
                 row_widget = QWidget()
+                row_widget.setObjectName("FieldGroup")
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(0, 0, 0, 0)
                 row_layout.setSpacing(12)
@@ -474,9 +563,11 @@ class ModuleWidget(QWidget):
             cb = QCheckBox(field)
             cb.setChecked(True)
             self._field_cbs.append(cb)
+            cb.toggled.connect(self._update_field_summary)
             row_layout.addWidget(cb)
 
         self._field_layout.addStretch()
+        self._filter_fields()
 
     def _set_all_fields(self, checked):
         for cb in self._field_cbs:
@@ -488,19 +579,21 @@ class ModuleWidget(QWidget):
     # ---- 类目管理 ----
 
     def _add_category(self):
-        dlg = AddCategoryDialog(self._get_config_path(), self)
-        if dlg.exec():
-            self._refresh_combo()
-            self.tag_combo.setCurrentIndex(self.tag_combo.count() - 1)
+        if self.template_panel.open_product():
+            self.field_splitter.setSizes([800, 420])
 
     def _edit_fields(self):
         key = self.tag_combo.currentData()
         if not key:
             QMessageBox.warning(self, "提示", "请先选择一个类目。")
             return
-        dlg = FieldEditorDialog(self._get_config_path(), key, self)
-        if dlg.exec():
-            self._refresh_field_cbs()
+        if self.template_panel.open_product(key):
+            self.field_splitter.setSizes([800, 420])
+
+    def _template_saved(self, key):
+        self._refresh_combo()
+        self.tag_combo.setCurrentIndex(self.tag_combo.findData(key))
+        self._refresh_field_cbs()
 
     # ---- 脚本执行 ----
 
@@ -519,9 +612,16 @@ class ModuleWidget(QWidget):
         except TypeError:
             pass
         self.runner.log_signal.connect(log_area.append)
+        bar = getattr(run_btn, '_task_bar', None)
+        if bar is not None:
+            paths, folder = self._result_sources[run_btn]()
+            bar.begin(paths, folder)
+            self.runner.log_signal.connect(bar.observe)
 
         def _done(code):
-            log_area.append(f"\n[完成] 退出码: {code}")
+            log_area.append('处理完成' if code == 0 else f'处理失败（错误码 {code}），请查看上方日志。')
+            if bar is not None:
+                bar.finish(code, stopped=run_btn == self.run_btn1 and getattr(self, '_stop_requested', False))
             log_area.set_status("ok" if code == 0 else "error")
             if run_btn is not None:
                 set_running_state(run_btn, False)
@@ -538,6 +638,7 @@ class ModuleWidget(QWidget):
         script_path = os.path.join(self.config_mgr.get_script_dir(), script)
         return self.runner.run_script(script_path, env_extra=env)
 
+    @validated(lambda s: [(s.tag_input, '输入文件')], "run_btn1")
     def _run_tagging(self):
         inp = self.tag_input.text().strip()
         if not inp:
@@ -545,9 +646,21 @@ class ModuleWidget(QWidget):
             return
         selected = self._get_selected_fields()
         if not selected:
-            QMessageBox.warning(self, "提示", "请至少勾选一个提取字段。")
+            self.run_btn1._task_bar.summary.setText('请至少勾选一个提取字段。')
+            self.field_search.setFocus()
             return
         env = {"INPUT_FILE": inp}
+        filter_enabled = self.tag_filter_cb.isChecked()
+        if filter_enabled:
+            for control, title in ((self.tag_filter_column, '标签列'),
+                                   (self.tag_filter_value, '标签值')):
+                if not control.text().strip():
+                    self.run_btn1._task_bar.summary.setText(f'请填写{title}。')
+                    control.setFocus()
+                    return
+        env['EXTRACT_FILTER_ENABLED'] = '1' if filter_enabled else '0'
+        env['EXTRACT_FILTER_COLUMN'] = self.tag_filter_column.text().strip()
+        env['EXTRACT_FILTER_VALUE'] = self.tag_filter_value.text().strip()
         out = self.tag_output.text().strip()
         if out:
             env["OUTPUT_FILE"] = out
@@ -555,6 +668,9 @@ class ModuleWidget(QWidget):
         if key:
             env["CURRENT_PRODUCT"] = key
         env["CONFIG_FILE"] = self._get_config_path()
+        # Capture before the worker starts: later template saves affect only new runs.
+        with open(self._get_config_path(), encoding='utf-8') as file:
+            env['PRODUCT_CONFIG_SNAPSHOT'] = json.dumps(json.load(file), ensure_ascii=False)
         env["FIELDS"] = ",".join(selected)
         env["ENABLE_VISION"] = "1" if self.vision_cb.isChecked() else "0"
         env["ENABLE_FETCH"] = "1" if self.fetch_cb.isChecked() else "0"
@@ -568,6 +684,7 @@ class ModuleWidget(QWidget):
             env["EXTRACT_CONCURRENCY"] = str(self.concurrency_spin.value())
         else:
             script = "exstract_from_description.py"
+        self._stop_requested = False
         self.stop_btn1.setEnabled(True)
         started = self._run(
             script, self.log1, env,
@@ -580,6 +697,7 @@ class ModuleWidget(QWidget):
         self.stop_btn1.setEnabled(False)
 
     def _stop_extraction(self):
+        self._stop_requested = True
         """创建停止信号文件，通知脚本优雅退出。"""
         try:
             with open(self._stop_file, "w") as f:
@@ -589,6 +707,7 @@ class ModuleWidget(QWidget):
         except Exception as e:
             self.log1.append(f"\n[错误] 无法创建停止信号: {e}")
 
+    @validated(lambda s: [(s.score_dir, '数据目录')], "run_btn2")
     def _run_scoring(self):
         data_dir = self.score_dir.text().strip()
         output = self.score_output.text().strip()
@@ -600,6 +719,7 @@ class ModuleWidget(QWidget):
             env["MARKET_OUTPUT_FILE"] = output
         self._run("欧洲市场规划/机会得分.py", self.log2, env, run_btn=self.run_btn2)
 
+    @validated(lambda s: [(s.cat_input, '类目数据文件')], "run_btn3")
     def _run_category(self):
         inp = self.cat_input.text().strip()
         if not inp:
@@ -612,6 +732,7 @@ class ModuleWidget(QWidget):
             env["CATEGORY_CHECKPOINT_FILE"] = out
         self._run("欧洲市场规划/类目初筛.py", self.log3, env, run_btn=self.run_btn3)
 
+    @validated(lambda s: [(s.progress_ids, '全部 ID 文件'), (s.progress_dir, '已爬取目录')], "run_btn4")
     def _run_progress(self):
         ids_file = self.progress_ids.text().strip()
         data_dir = self.progress_dir.text().strip()

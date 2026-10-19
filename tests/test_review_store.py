@@ -32,23 +32,23 @@ class ReviewStoreTests(unittest.TestCase):
         finally:
             store.close()
 
-    def test_outbox_contains_normalized_payload_and_is_idempotent(self):
+    def test_collection_events_contain_normalized_local_history(self):
         store = ReviewStore(self.path)
         try:
             review = {"review_id": "R123456789", "rating": "5 out of 5"}
             run = {"started_at": "2026-08-29T00:00:00+00:00", "status": "ok"}
-            first = store.enqueue_collection("B012345678", "amazon.com", "Title", [review], run=run)
-            second = store.enqueue_collection("B012345678", "amazon.com", "Title", [review], run=run)
-            self.assertEqual(first, second)
-            rows = store.pending_outbox()
-            self.assertEqual(len(rows), 1)
+            first = store.record_collection("B012345678", "amazon.com", "Title", [review], run=run)
+            second = store.record_collection("B012345678", "amazon.com", "Title", [review], run=run)
+            self.assertNotEqual(first, second)
+            rows = list(store.conn.execute("SELECT * FROM collection_events"))
+            self.assertEqual(len(rows), 2)
             payload = json.loads(rows[0]["payload_json"])
             self.assertEqual(payload["reviews"][0]["rating"], 5.0)
             self.assertEqual(payload["product"]["asin"], "B012345678")
         finally:
             store.close()
 
-    def test_product_category_is_cached_and_added_to_outbox(self):
+    def test_product_category_saved_in_local_history(self):
         store = ReviewStore(self.path)
         categories = [{
             "category_id": "10967801",
@@ -68,11 +68,11 @@ class ReviewStoreTests(unittest.TestCase):
             self.assertEqual(stats[0]["category_id"], "10967801")
             self.assertEqual(stats[0]["category_name"], "Power Strips")
 
-            store.enqueue_collection(
+            store.record_collection(
                 "B012345678", "amazon.com", "Title", [], categories=categories,
                 run={"started_at": "2026-09-10T00:00:00+00:00", "status": "ok"},
             )
-            payload = json.loads(store.pending_outbox()[0]["payload_json"])
+            payload = json.loads(store.conn.execute("SELECT * FROM collection_events").fetchone()["payload_json"])
             self.assertEqual(payload["product"]["categories"][0]["category_id"], "10967801")
         finally:
             store.close()
@@ -131,20 +131,6 @@ class ReviewStoreTests(unittest.TestCase):
         finally:
             store.close()
 
-    def test_recovers_expired_sync_lease(self):
-        store = ReviewStore(self.path)
-        try:
-            outbox_id = store.enqueue_collection("B012345678", "amazon.com", "", [])
-            store.mark_outbox_syncing(outbox_id)
-            store.conn.execute(
-                "update outbox set updated_at='2000-01-01T00:00:00+00:00' where id=?",
-                (outbox_id,),
-            )
-            store.conn.commit()
-            rows = store.pending_outbox()
-            self.assertEqual([row["id"] for row in rows], [outbox_id])
-        finally:
-            store.close()
 
 
 if __name__ == "__main__":

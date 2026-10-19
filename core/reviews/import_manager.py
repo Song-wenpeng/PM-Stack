@@ -11,7 +11,7 @@ class ImportManagerDialog(QDialog):
         self.setWindowTitle("导入记录 · 纠错 / 移除")
         self.resize(1000,550)
         layout=QVBoxLayout(self)
-        hint=QLabel("按文件来源管理本地未同步导入。纠正归属会保留原文和标签；移除仅解除本批次的商品关联。每次操作先备份。")
+        hint=QLabel("按文件来源管理本地导入。纠正归属会保留原文和标签；移除仅解除本批次的商品关联。每次操作先备份。")
         hint.setWordWrap(True);layout.addWidget(hint)
         self.table=QTableWidget(0,4)
         self.table.setHorizontalHeaderLabels(["目标 ASIN","站点","来源文件","评论数"])

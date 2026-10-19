@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QApplication, QComboBox
 
 from core.config_manager import ConfigManager
 from core.app_updater import download_verified_file, load_update_manifest
-from core.main_window import MainWindow, SettingsDialog
+from core.main_window import MainWindow, SettingsDialog, CURRENT_VERSION
 from core.runner import ScriptRunner
 from core.updater import _safe_extract_zip
 from scripts.fix_sales_data import fix_single
@@ -219,7 +219,8 @@ class RunnerIsolationTests(unittest.TestCase):
                 window = MainWindow()
                 try:
                     runners = [widget.runner for _, widget in window._modules]
-                    self.assertGreaterEqual(len(runners), 5)
+                    # Four built-in modules remain; plugins may add more runners.
+                    self.assertGreaterEqual(len(runners), 4)
                     self.assertEqual(len(runners), len({id(item) for item in runners}))
                 finally:
                     window.close()
@@ -246,57 +247,24 @@ class UIInteractionTests(unittest.TestCase):
                     info["name"]: widget for info, widget in window._modules
                 }
                 comments = modules["评论分析"]
-                comments_test = modules["评论分析TEST"]
+                self.assertNotIn("评论分析TEST", modules)
                 sales = modules["销量数据"]
                 market = modules["市场规划"]
                 matrix = modules["产品矩阵"]
 
-                combos = window.findChildren(QComboBox)
-                # 评论分析 TEST 模块也包含一个品类下拉框。
-                legacy_combos = [
-                    combo for combo in combos
-                    if not matrix.free_matrix.isAncestorOf(combo)
-                    and not comments.review_collection.isAncestorOf(combo)
-                ]
-                self.assertEqual(len(legacy_combos), 12)
-                self.assertTrue(all(combo.count() > 0 for combo in legacy_combos))
-                review_combos = [
-                    combo for combo in combos
-                    if comments.review_collection.isAncestorOf(combo)
-                ]
-                self.assertEqual(len(review_combos), 5)
-                self.assertTrue(all(combo.count() > 0 for combo in review_combos))
-                collected = str(Path(temp_dir) / "collected_reviews.xlsx")
-                comments._use_collected_review_file(collected)
-                self.assertEqual(comments.s12_input.text(), collected)
-                self.assertEqual(comments.tabs.currentIndex(), 3)
-                self.assertEqual(comments_test.concurrency_spin.value(), 8)
-                self.assertEqual(comments_test.rpm_spin.value(), 900)
-                self.assertEqual(comments_test.tpm_spin.value(), 90000)
+                self.assertEqual(
+                    [comments.tabs.tabText(i) for i in range(comments.tabs.count())],
+                    ["开始分析", "评论库", "分析记录"],
+                )
+                self.assertIs(comments.tabs.currentWidget(), comments.start_tab)
+                self.assertGreater(comments.product_combo.count(), 1)
+                self.assertEqual(comments.concurrency_spin.value(), 8)
+                self.assertEqual(comments.rpm_spin.value(), 900)
+                self.assertEqual(comments.tpm_spin.value(), 90000)
+                self.assertTrue(comments.more_options.isHidden())
+                self.assertTrue(comments.settings_dialog.isHidden())
 
                 first = str(Path(temp_dir) / "first.xlsx")
-                second = str(Path(temp_dir) / "second.xlsx")
-                comments.s1_input.setText(first)
-                comments.s1_input.setText(second)
-                self.assertEqual(
-                    comments.s1_output.text(),
-                    str(Path(temp_dir) / "second_AI处理.xlsx"),
-                )
-                comments.s1_output.setText(str(Path(temp_dir) / "manual.xlsx"))
-                comments.s1_input.setText(str(Path(temp_dir) / "third.xlsx"))
-                self.assertEqual(
-                    comments.s1_output.text(),
-                    str(Path(temp_dir) / "manual.xlsx"),
-                )
-
-                comments.s1_product.setCurrentIndex(1)
-                comments.s2_product.setCurrentIndex(0)
-                comments.s2_input.setText(first)
-                with mock.patch.object(comments, "_run") as run_comments:
-                    comments._run_step2()
-                run_comments.assert_not_called()
-                self.assertIn("选择一个分析品类", comments.log_s2.text.toPlainText())
-
                 sales.cross_filter_rows[0][0].setText("品牌")
                 sales.cross_filter_rows[0][1].setText("A")
                 self.assertEqual(sales.cross_filter_count.maximum(), 10)
@@ -318,73 +286,39 @@ class UIInteractionTests(unittest.TestCase):
                 self.assertEqual(sales.cross_filter_rows[0][1].text(), "A")
 
                 sales.trend_folder.setText(temp_dir)
-                sales.trend_asins.setPlainText("B00DOMYL24")
                 sales.trend_volume_field.setEditText("   ")
                 with mock.patch.object(sales, "_run") as run_sales:
-                    sales._run_trend()
+                    sales._run_extract_data()
                 run_sales.assert_not_called()
-                self.assertIn("销量字段", sales.log2.text.toPlainText())
+                self.assertIn("销量列", sales.log2.text.toPlainText())
 
                 history_dir = str(Path(temp_dir) / "排插_US_历史数据")
                 sales.trend_folder.setText(history_dir)
-                sales.trend_asins.setPlainText(
-                    "b00domyl24, B014EKQ5AA\nb00domyl24")
                 sales.trend_volume_field.setEditText("子体销量_矫正")
                 sales.trend_revenue_field.setEditText("子体销售额_矫正")
-                sales.trend_mode.setCurrentIndex(0)
-                sales.trend_second_file.setText(first)
-                sales.trend_volume_sheet.setText("子体销量")
+                sales.trend_asin_file.setText(first)
+                sales.trend_asin_sheet.setText("商品属性")
+                sales.trend_output.setText(str(Path(temp_dir) / "history.xlsx"))
+                sales.trend_output_volume_sheet.setText("销量历史")
+                sales.trend_output_revenue_sheet.setText("销额历史")
                 with mock.patch.object(sales, "_run", return_value=True) as run_sales:
-                    sales._run_trend()
+                    sales._run_extract_data()
                 trend_args = run_sales.call_args.args[2]
-                self.assertIn("--asins", trend_args)
-                self.assertEqual(
-                    trend_args[trend_args.index("--asins") + 1],
-                    "B00DOMYL24,B014EKQ5AA",
-                )
-                self.assertEqual(
-                    trend_args[trend_args.index("--chart") + 1],
-                    str(Path(temp_dir) / "规划" /
-                        "B00DOMYL24_B014EKQ5AA.png"),
-                )
-                self.assertEqual(
-                    trend_args[trend_args.index("--mode") + 1], "volume")
-                self.assertEqual(
-                    trend_args[trend_args.index("--second-file") + 1], first)
-                self.assertEqual(
-                    trend_args[trend_args.index("--volume-sheet") + 1],
-                    "子体销量",
-                )
-
-                sales.trend_mode.setCurrentIndex(2)
-                self.assertIn("均价", sales.trend_mode_hint.text())
-                self.assertEqual(
-                    sales._trend_volume_sheet_label.text(),
-                    "销量数据Sheet *:",
-                )
-                self.assertEqual(
-                    sales._trend_revenue_sheet_label.text(),
-                    "销额数据Sheet *:",
-                )
-                sales.trend_revenue_sheet.setText("子体销额")
-                with mock.patch.object(sales, "_run", return_value=True) as run_sales:
-                    sales._run_trend_export()
-                export_args = run_sales.call_args.args[2]
-                self.assertEqual(
-                    export_args[export_args.index("--export-data") + 1],
-                    str(Path(temp_dir) / "规划" /
-                        "B00DOMYL24_B014EKQ5AA.xlsx"),
-                )
-                self.assertIn("--export-only", export_args)
-                self.assertEqual(
-                    export_args[export_args.index("--mode") + 1],
-                    "volume-price",
-                )
+                self.assertEqual(trend_args[trend_args.index("--output") + 1],
+                                 str(Path(temp_dir) / "history.xlsx"))
+                self.assertEqual(trend_args[trend_args.index("--asin-file") + 1], first)
+                self.assertEqual(trend_args[trend_args.index("--asin-sheet") + 1],
+                                 "商品属性")
+                self.assertEqual(trend_args[trend_args.index("--output-volume-sheet") + 1],
+                                 "销量历史")
+                self.assertEqual(trend_args[trend_args.index("--output-revenue-sheet") + 1],
+                                 "销额历史")
+                self.assertEqual(run_sales.call_args.args[0], "extract_history_data.py")
 
                 sales.cross_trend_mode.setCurrentIndex(1)
-                self.assertEqual(sales._cross_data_label.text(), "数据Sheet:")
+                self.assertEqual(sales._cross_data_label.text(), "销量历史表:")
                 self.assertEqual(
-                    sales._cross_data2_label.text(), "第二数据Sheet *:")
+                    sales._cross_data2_label.text(), "销额历史表 *:")
                 self.assertIn("销额趋势", sales.cross_mode_hint.text())
                 sales.cross_trend_mode.setCurrentIndex(2)
                 self.assertIn("均价", sales.cross_mode_hint.text())
@@ -411,7 +345,7 @@ class UIInteractionTests(unittest.TestCase):
                     ) as check_app_update:
                         dialog._check_app_update()
                     check_app_update.assert_called_once_with(
-                        str(Path(temp_dir) / "missing-update.json"), "v1.10.2")
+                        str(Path(temp_dir) / "missing-update.json"), CURRENT_VERSION)
                     self.assertFalse(dialog.check_app_update_btn.isEnabled())
                     dialog._on_app_check_done(False, "验证完成")
                     self.assertTrue(dialog.check_app_update_btn.isEnabled())

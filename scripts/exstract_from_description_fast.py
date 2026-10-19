@@ -32,6 +32,9 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from core.field_row_filter import select_field_rows
+from core.field_workbook import FieldWorkbookWriter, source_fingerprint
+from core.field_values import is_empty_field as is_empty
 import requests
 from openai import OpenAI
 from PIL import Image
@@ -244,6 +247,9 @@ def load_product_config(config_file, product_name=None):
         raise FileNotFoundError(f"字段配置文件不存在：{config_file}")
     with open(config_file, "r", encoding="utf-8") as f:
         config = json.load(f)
+    snapshot = os.getenv('PRODUCT_CONFIG_SNAPSHOT', '')
+    if snapshot:
+        config = json.loads(snapshot)
     if not product_name:
         product_name = config.get("current_product")
     if not product_name:
@@ -255,28 +261,11 @@ def load_product_config(config_file, product_name=None):
     missing_keys = [k for k in ("target_fields", "field_config") if k not in product_config]
     if missing_keys:
         raise ValueError(f"产品配置缺少必要字段：{missing_keys}")
-    return product_name, product_config
+    from core.field_templates import with_output_rules
+    return product_name, with_output_rules(product_config)
 
 
 # ================= 3. 工具函数 =================
-
-def is_empty(value):
-    if value is None:
-        return True
-    try:
-        if pd.isna(value):
-            return True
-    except Exception:
-        pass
-    value_str = str(value).strip()
-    if value_str == "":
-        return True
-    if value_str.lower() in ["nan", "none", "null", "n/a", "na"]:
-        return True
-    if value_str in ["未找到", "无", "空", "未知", "未说明"]:
-        return True
-    return False
-
 
 def clean_value(value):
     if value is None:
@@ -571,12 +560,15 @@ class CheckpointStore:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             self.load_warning = f"断点文件无法读取，已忽略: {exc}"
 
-    def successful_rows(self) -> Dict[int, Dict[str, Any]]:
+    def recoverable_rows(self) -> Dict[int, Dict[str, Any]]:
+        """Recover saved values even from incomplete, failed or stopped rows.
+
+        Old versions marked incomplete rows successful; callers must recheck
+        the current selected fields after merging instead of trusting status.
+        """
         result = {}
         for raw_index, record in self.data.get("rows", {}).items():
             if not isinstance(record, dict):
-                continue
-            if record.get("status", "") not in ("", "成功"):
                 continue
             details = record.get("result")
             if not isinstance(details, dict):
@@ -716,7 +708,7 @@ def extract_text_features_concurrent(
 5. JSON 的 key 必须严格使用以下字段名：
 {missing_fields}
 6. 只输出 JSON，不要输出解释、分析、Markdown 代码块。
-7. 字段值尽量使用中文表述；规格数值、单位、型号可以保留原文。"""
+7. 优先遵循各字段的输出语言与格式要求；未指定时尽量使用中文，规格数值、单位、型号保留原文。不进行单位换算。"""
 
     for attempt in range(1, MAX_TEXT_RETRIES + 1):
         if stop_event.is_set():
@@ -1058,8 +1050,7 @@ def main():
         raise ValueError("未检测到环境变量 INPUT_FILE")
     if not OUTPUT_FILE:
         # 默认输出路径
-        base, ext = os.path.splitext(INPUT_FILE)
-        OUTPUT_FILE_LOCAL = f"{base}_打标{ext or '.xlsx'}"
+        OUTPUT_FILE_LOCAL = INPUT_FILE
     else:
         OUTPUT_FILE_LOCAL = OUTPUT_FILE
 
@@ -1093,7 +1084,14 @@ def main():
 
     # 读取输入
     print(f"读取文件：{INPUT_FILE}", flush=True)
-    df = pd.read_excel(INPUT_FILE)
+    writer = FieldWorkbookWriter(INPUT_FILE, OUTPUT_FILE_LOCAL, target_fields)
+    df = pd.read_excel(INPUT_FILE, dtype=object)
+    selected_indices, row_filter = select_field_rows(df)
+    if not selected_indices:
+        print('[提示] 没有匹配的行，未执行提取，文件未修改。', flush=True)
+        return
+    selected_set = set(selected_indices)
+    writer.restore_logs(df)
 
     missing_text_cols = [col for col in TEXT_COLS if col not in df.columns]
     if missing_text_cols:
@@ -1106,7 +1104,8 @@ def main():
     for field in target_fields + AUX_FIELDS:
         if field not in df.columns:
             df[field] = ""
-    df["_处理状态"] = ""
+    if "_处理状态" not in df.columns:
+        df["_处理状态"] = ""
 
     output_dir = os.path.dirname(OUTPUT_FILE_LOCAL)
     if output_dir:
@@ -1123,11 +1122,19 @@ def main():
     # 断点
     checkpoint_path = os.getenv("EXTRACT_CHECKPOINT_FILE") or f"{OUTPUT_FILE_LOCAL}.checkpoint.json"
     signature = build_run_signature(product_config)
+    signature.pop('input_size', None)
+    signature.pop('input_mtime_ns', None)
+    signature['source_content'] = source_fingerprint(INPUT_FILE, product_config['target_fields'])
+    signature['row_filter'] = row_filter
+    signature['fields'] = target_fields
+    signature['enable_vision'] = enable_vision
+    signature['enable_fetch'] = ENABLE_FETCH
+    signature['product_rules'] = product_config
     checkpoint = CheckpointStore(checkpoint_path, signature)
     if checkpoint.load_warning:
         print(f"[提示] {checkpoint.load_warning}", flush=True)
     if checkpoint.loaded:
-        print(f"发现有效断点，将跳过已成功条目: {checkpoint.path}", flush=True)
+        print(f"发现有效断点，将恢复已有结果并重新检查缺失字段: {checkpoint.path}", flush=True)
 
     # 限速器与指标
     text_limiter = RollingWindowRateLimiter(RPM_LIMIT, TPM_LIMIT)
@@ -1140,13 +1147,123 @@ def main():
     df_columns = list(df.columns)
     stop_event = threading.Event()
 
+    # 结果存储
+    results: List[Optional[Dict[str, Any]]] = [None if i in selected_set else {"_skipped": True} for i in range(n)]
+    statuses: List[str] = [""] * n
+
+    stats = {
+        "total": n, "completed": n - len(selected_indices), "succeeded": 0, "failed": 0,
+        "skipped": n - len(selected_indices), "resumed": 0, "incomplete": 0, "stopped": False,
+    }
+    start_time = time.time()
+
+    pending = deque()
+    unsaved_updates = 0
+    recovered_results: Dict[int, Dict[str, Any]] = {}
+
+    def save_checkpoint(force=False):
+        nonlocal unsaved_updates
+        if not force and unsaved_updates < CHECKPOINT_EVERY:
+            return
+        checkpoint.save()
+        unsaved_updates = 0
+
+    def store_result(index: int, details: Dict[str, Any], status: str):
+        nonlocal unsaved_updates
+        # Keep earlier partial results and evidence when another attempt stops
+        # or only fills some fields. Current workbook values always win.
+        previous = recovered_results.get(index)
+        if previous is None:
+            # A saved workbook can carry evidence even after its checkpoint
+            # was removed. Retain it when skipping or filling another field.
+            previous = {}
+            for key, column in (("_text_fields", "文本提取字段"),
+                                ("_vision_fields", "图片识别提取字段")):
+                value = df.at[index, column]
+                previous[key] = [] if is_empty(value) else str(value).split("；")
+            try:
+                logs = json.loads(str(df.at[index, "图片识别批次日志"]))
+            except (ValueError, TypeError):
+                logs = []
+            previous["_vision_logs"] = logs if isinstance(logs, list) else []
+        details = dict(details)
+        for key in ("_text_fields", "_vision_fields"):
+            details[key] = list(dict.fromkeys(previous.get(key, []) + details.get(key, [])))
+        details["_vision_logs"] = previous.get("_vision_logs", []) + details.get("_vision_logs", [])
+        apply_row_to_df(index, details, status)
+        details["_extracted"] = {f: df.at[index, f] for f in target_fields
+                                 if not is_empty(df.at[index, f])}
+        missing = [f for f in target_fields if is_empty(df.at[index, f])]
+        details["_missing_fields"] = missing
+        details["_complete"] = not missing
+        if not status and missing:
+            status = "未完整"
+        df.at[index, "_处理状态"] = status
+        results[index] = details
+        statuses[index] = status
+        checkpoint.update(index, details, status)
+        unsaved_updates += 1
+        save_checkpoint()
+        return status
+
+    def apply_row_to_df(index: int, result: Dict[str, Any], status: str):
+        """把单行结果增量写回 DataFrame，便于周期性保存 Excel。"""
+        extracted_data = result.get("_extracted", {})
+        for field in target_fields:
+            value = extracted_data.get(field, "")
+            if not is_empty(value) and is_empty(df.at[index, field]):
+                df.at[index, field] = value
+        final_missing = [f for f in target_fields if is_empty(df.at[index, f])]
+        for key, column in (("_text_fields", "文本提取字段"),
+                            ("_vision_fields", "图片识别提取字段")):
+            if key in result:
+                existing = [] if is_empty(df.at[index, column]) else str(df.at[index, column]).split("；")
+                df.at[index, column] = "；".join(sorted(set(existing + result[key])))
+        if "_vision_logs" in result:
+            df.at[index, "图片识别批次日志"] = json.dumps(result["_vision_logs"], ensure_ascii=False)
+        df.at[index, "最终缺失字段"] = "；".join(final_missing)
+        df.at[index, "提取完整状态"] = "是" if not final_missing else "否"
+        df.at[index, "_处理状态"] = status
+
+    def save_excel():
+        try:
+            writer.save(df.loc[selected_indices])
+            checkpoint.data['signature']['source_content'] = source_fingerprint(INPUT_FILE, product_config['target_fields'])
+            checkpoint.save()
+            return True
+        except Exception as exc:
+            print(f"[警告] 临时保存 Excel 失败（不影响断点续跑）: {exc}", flush=True)
+            return False
+
+    # 加载断点（需在 apply_row_to_df 定义之后）
+    if checkpoint.loaded:
+        for idx, details in checkpoint.recoverable_rows().items():
+            if idx in selected_set:
+                apply_row_to_df(idx, details, "")
+                rows_data[idx] = df.loc[idx].to_dict()
+                recovered_results[idx] = details
+                stats["resumed"] += 1
+
+    # Completeness is based on today's input plus cached values, never on a
+    # previous run's status. Do this before registering any browser requests.
+    for idx in selected_indices:
+        if all(not is_empty(rows_data[idx].get(f)) for f in target_fields):
+            store_result(idx, {"_skipped": True}, "")
+            stats["completed"] += 1
+            stats["succeeded"] += 1
+            stats["skipped"] += 1
+
+    pending = deque(i for i, r in enumerate(results) if r is None)
+    print(f"[提取检查] 所选字段已完整 {len(selected_indices) - len(pending)} 行，"
+          f"待补缺失字段 {len(pending)} 行", flush=True)
+
     # ---- 补抓准备：缺资料的行登记 ASIN，工作线程里现抓现用 ----
     fetch_needed: Dict[int, str] = {}
     fetch_checkpoint: Dict[str, Any] = {}
     fetch_checkpoint_path = ""
     fetch_lock = threading.Lock()
     fetch_pool = None
-    if ENABLE_FETCH:
+    if ENABLE_FETCH and pending:
         from core.reviews.product_fetcher import resolve_asin_and_url
         link_col = next((c for c in FETCH_LINK_CANDIDATES if c in df.columns), None)
         if link_col is None:
@@ -1175,7 +1292,8 @@ def main():
             except Exception as exc:
                 print(f"[警告] 抓取断点读取失败，忽略：{exc}", flush=True)
         reused = 0
-        for idx, row in enumerate(rows_data):
+        for idx in pending:
+            row = rows_data[idx]
             need = is_empty(row.get("五点描述")) or all(
                 is_empty(row.get(c)) for c in IMAGE_COLS)
             if not need:
@@ -1196,79 +1314,12 @@ def main():
         print(f"[补抓] 待抓取 {len(fetch_needed)} 行 | 断点复用 {reused} 行 | "
               f"提取并发 {CONCURRENCY} | 抓取线程 {FETCH_WORKERS} | "
               f"预抓缓冲 {FETCH_LOOKAHEAD}", flush=True)
-        fetch_pool = FetchPool(
-            FETCH_WORKERS, fetch_checkpoint, fetch_checkpoint_path, fetch_lock,
-            stop_check=stop_event.is_set)
-        print(f"[补抓] 抓取线程池已启动：{FETCH_WORKERS} 个抓取线程（解耦流水线，提前预抓）",
-              flush=True)
-
-    # 结果存储
-    results: List[Optional[Dict[str, Any]]] = [None] * n
-    statuses: List[str] = [""] * n
-
-    stats = {
-        "total": n, "completed": 0, "succeeded": 0, "failed": 0,
-        "skipped": 0, "resumed": 0, "stopped": False,
-    }
-    start_time = time.time()
-
-    pending = deque()
-    unsaved_updates = 0
-    save_lock = threading.Lock()
-
-    def save_checkpoint(force=False):
-        nonlocal unsaved_updates
-        if not force and unsaved_updates < CHECKPOINT_EVERY:
-            return
-        checkpoint.save()
-        unsaved_updates = 0
-
-    def store_result(index: int, details: Dict[str, Any], status: str):
-        nonlocal unsaved_updates
-        results[index] = details
-        statuses[index] = status
-        checkpoint.update(index, details, status)
-        unsaved_updates += 1
-        save_checkpoint()
-
-    def apply_row_to_df(index: int, result: Dict[str, Any], status: str):
-        """把单行结果增量写回 DataFrame，便于周期性保存 Excel。"""
-        if result.get("_skipped"):
-            return
-        extracted_data = result.get("_extracted", {})
-        text_fields = result.get("_text_fields", [])
-        vision_fields_all = result.get("_vision_fields", [])
-        vision_batch_logs = result.get("_vision_logs", [])
-        for field in target_fields:
-            value = extracted_data.get(field, "")
-            if not is_empty(value) and is_empty(df.at[index, field]):
-                df.at[index, field] = value
-        final_missing = [f for f in target_fields if is_empty(df.at[index, f])]
-        df.at[index, "文本提取字段"] = "；".join(sorted(set(text_fields)))
-        df.at[index, "图片识别提取字段"] = "；".join(sorted(set(vision_fields_all)))
-        df.at[index, "图片识别批次日志"] = json.dumps(vision_batch_logs, ensure_ascii=False)
-        df.at[index, "最终缺失字段"] = "；".join(final_missing)
-        df.at[index, "提取完整状态"] = "是" if not final_missing else "否"
-        df.at[index, "_处理状态"] = status
-
-    def save_excel():
-        try:
-            df.to_excel(OUTPUT_FILE_LOCAL, index=False)
-        except Exception as exc:
-            print(f"[警告] 临时保存 Excel 失败（不影响断点续跑）: {exc}", flush=True)
-
-    # 加载断点（需在 apply_row_to_df 定义之后）
-    if checkpoint.loaded:
-        for idx, details in checkpoint.successful_rows().items():
-            if 0 <= idx < n:
-                results[idx] = details
-                statuses[idx] = ""
-                apply_row_to_df(idx, details, "")
-                stats["completed"] += 1
-                stats["succeeded"] += 1
-                stats["resumed"] += 1
-
-    pending = deque(i for i, r in enumerate(results) if r is None)
+        if fetch_needed:
+            fetch_pool = FetchPool(
+                FETCH_WORKERS, fetch_checkpoint, fetch_checkpoint_path, fetch_lock,
+                stop_check=stop_event.is_set)
+            print(f"[补抓] 抓取线程池已启动：{FETCH_WORKERS} 个抓取线程（解耦流水线，提前预抓）",
+                  flush=True)
 
     # ---- 解耦预抓：按提取消费顺序，提前把后面若干行的抓取请求排进抓取线程池 ----
     # 抓取线程在后台把这些行抓好放进各自 Future 缓冲；提取 worker 走到某行时
@@ -1310,7 +1361,7 @@ def main():
         print(
             f"进度: {done}/{n} ({done * 100 // max(1, n)}%) | "
             f"跳过 {stats['skipped']} | 断点复用 {stats['resumed']} | "
-            f"失败 {stats['failed']} | "
+            f"失败 {stats['failed']} | 未完整 {stats['incomplete']} | "
             f"已用 {fmt_duration(elapsed)} | 剩余约 {fmt_duration(eta)}",
             flush=True)
 
@@ -1372,18 +1423,19 @@ def main():
                     print(f"[失败] 第 {idx + 1} 行异常: {exc}", flush=True)
                     result, status = {}, "AI提取失败"
 
-                if ENABLE_FETCH and idx in fetch_needed:
+                if ENABLE_FETCH:
                     for col in ["五点描述"] + IMAGE_COLS:
                         value = rows_data[idx].get(col)
                         if not is_empty(value) and is_empty(df.at[idx, col]):
                             df.at[idx, col] = value
-                store_result(idx, result, status)
-                apply_row_to_df(idx, result, status)
+                status = store_result(idx, result, status)
                 stats["completed"] += 1
                 if status == "AI提取失败":
                     stats["failed"] += 1
                 elif status == "已停止":
                     stats["stopped"] = True
+                elif status == "未完整":
+                    stats["incomplete"] += 1
                 elif result.get("_skipped"):
                     stats["skipped"] += 1
                     stats["succeeded"] += 1
@@ -1391,8 +1443,8 @@ def main():
                     stats["succeeded"] += 1
                 print_progress()
                 if stats["completed"] % SAVE_EVERY == 0:
-                    save_excel()
-                    print(f"已临时保存到：{OUTPUT_FILE_LOCAL}", flush=True)
+                    if save_excel():
+                        print(f"已临时保存到：{OUTPUT_FILE_LOCAL}", flush=True)
 
             pump_prefetch()
             submit_until_full()
@@ -1407,7 +1459,6 @@ def main():
     # 未提交的行标记为已停止
     for idx in list(pending):
         store_result(idx, {}, "已停止")
-        apply_row_to_df(idx, {}, "已停止")
         stats["completed"] += 1
 
     # 兜底
@@ -1415,14 +1466,15 @@ def main():
         if r is None:
             status = "已停止" if stats["stopped"] else "AI提取失败"
             store_result(idx, {}, status)
-            apply_row_to_df(idx, {}, status)
             stats["completed"] += 1
 
     save_checkpoint(force=True)
     print_progress(force=True)
 
     # 最终保存
-    df.to_excel(OUTPUT_FILE_LOCAL, index=False)
+    writer.save(df.loc[selected_indices])
+    checkpoint.data['signature']['source_content'] = source_fingerprint(INPUT_FILE, product_config['target_fields'])
+    checkpoint.save()
 
     # ---- 统计 ----
     elapsed = time.time() - start_time
@@ -1438,6 +1490,11 @@ def main():
         print(f"断点复用: {stats['resumed']} 条", flush=True)
     if stats["failed"] > 0:
         print(f"[警告] 失败 {stats['failed']} 条，断点保留: {checkpoint.path}", flush=True)
+    incomplete = sum(any(is_empty(df.at[idx, f]) for f in target_fields)
+                     for idx in selected_indices)
+    if incomplete:
+        print(f"[提示] 仍有 {incomplete} 行字段未完整，已保留断点；"
+              f"下次运行只补缺失字段: {checkpoint.path}", flush=True)
     print("=" * 50, flush=True)
 
     if stats["stopped"]:
@@ -1445,8 +1502,8 @@ def main():
         print(f"下次运行可从断点继续: {checkpoint.path}", flush=True)
         raise SystemExit(1)
 
-    # 全部成功则删除断点
-    if stats["failed"] == 0:
+    # Only remove recovery data when all selected fields are actually filled.
+    if stats["failed"] == 0 and incomplete == 0:
         checkpoint.remove()
 
     print(f"\n处理完成！结果已保存至：{OUTPUT_FILE_LOCAL}", flush=True)

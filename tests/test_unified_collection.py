@@ -1,4 +1,5 @@
 from tests import support
+from core.config_manager import ConfigManager
 
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -20,8 +21,8 @@ class UnifiedCollectionTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(support.cleanup_qt_widgets)
         self.temp = tempfile.TemporaryDirectory()
-        with patch.object(ReviewCollectionPanel, "_load_cloud_settings"):
-            self.panel = ReviewCollectionPanel(Mock(), Mock())
+        with patch.object(ReviewCollectionPanel, "_load_backup_settings"):
+            self.panel = ReviewCollectionPanel(ConfigManager(str(support.DATA_ROOT / "backup-ui-config.json")), Mock())
         self.panel.refresh_products = Mock()
         self.bridge = ExtensionBridge(str(Path(self.temp.name) / "test.db"), port=0)
         self.bridge.handle("/poll", {"client":CLIENT})
@@ -37,14 +38,20 @@ class UnifiedCollectionTests(unittest.TestCase):
         self.temp.cleanup()
 
     def start(self):
+        self.panel.collect_engine.setCurrentIndex(0)
         self.panel.collect_asins.setPlainText("B0DDG2KQQ9")
         self.panel._start_collection(False)
         return self.bridge.snapshot()["job"]
 
     def test_one_entry_and_capability_specific_controls(self):
         p = self.panel
-        self.assertEqual([p.inner_tabs.tabText(i) for i in range(p.inner_tabs.count())],
-                         ["评论采集", "评论库", "云端与备份"])
+        self.assertIs(p.pages.currentWidget(), p.library_page)
+        self.assertEqual(p.collect_engine.currentData(), "excel")
+        self.assertFalse(p.excel_options.ai.isChecked())
+        self.assertFalse(hasattr(p.excel_options,"sync"))
+        p._show_add_reviews()
+        self.assertIs(p.pages.currentWidget(), p.collect_page)
+        p.collect_engine.setCurrentIndex(0)
         self.assertEqual(p.collect_engine.currentData(), "extension")
         self.assertTrue(p.advanced_options.isHidden())
         self.assertTrue(p.collect_update_btn.isHidden())

@@ -100,7 +100,7 @@ def template_prompt_preview(key: str, entry: Dict[str, Any]) -> str:
     parts.append(f"\n【汇总统计字段 stats_fields】\n{', '.join(map(str, stats_fields)) or '（未配置）'}")
     parts.append("\n【生成规则】")
     parts.append(
-        "Step 1（AI 提取）：scripts/comments_step_1.py 的 build_prompt 把 product_desc、"
+        "Step 1（AI 提取）：scripts/comments_step_1_fast.py 的 build_prompt 把 product_desc、"
         "tasks 与固定的输出格式要求拼成每条评论的用户提示词，system_prompt 作为系统角色发送给模型。"
     )
     parts.append(
@@ -142,7 +142,7 @@ class AnalysisSendDialog(QDialog):
     def __init__(self, parent, filters: Dict[str, Any], product: Optional[Dict[str, Any]],
                  templates: Dict[str, Any]):
         super().__init__(parent)
-        self.setWindowTitle("发送到一键分析 · 确认范围与品类")
+        self.setWindowTitle("开始分析 · 确认评论与品类")
         self.setMinimumWidth(600)
         self._templates = templates
         self._count_ready = False
@@ -157,7 +157,7 @@ class AnalysisSendDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        scope = Card("本次分析范围", "确认后即固定，不会因列表选中行或筛选条件后续变化而改变")
+        scope = Card("本次分析范围", "将分析以下评论，并生成一份完整洞察报告。")
         form = QFormLayout()
         if product:
             scope_text = f"{product.get('asin', '')} · {product.get('marketplace', '')}"
@@ -193,7 +193,7 @@ class AnalysisSendDialog(QDialog):
         scope.content_layout.addLayout(form)
         layout.addWidget(scope)
 
-        category = Card("分析品类模板", "必选；不会静默沿用上一次其他商品的选择")
+        category = Card("选择产品品类", "选择适合这些评论的品类，确定报告的分析维度。")
         cform = QFormLayout()
         self.category_combo = configure_combo(QComboBox())
         self.category_combo.addItem("请选择分析品类…")
@@ -204,9 +204,9 @@ class AnalysisSendDialog(QDialog):
         cform.addRow("分析品类:", self.category_combo)
         self.summary_label = self._label("请先选择分析品类。")
         self.summary_label.setWordWrap(True)
-        cform.addRow("模板摘要:", self.summary_label)
+        cform.addRow("分析内容:", self.summary_label)
         preview_row = QHBoxLayout()
-        self.preview_btn = make_button("查看提示词", tooltip="只读展示配置中的模板内容与生成规则")
+        self.preview_btn = make_button("查看模板详情", "ghost", tooltip="查看分析模板的内容")
         self.preview_btn.setEnabled(False)
         self.preview_btn.clicked.connect(self._show_prompt_preview)
         preview_row.addWidget(self.preview_btn)
@@ -214,7 +214,7 @@ class AnalysisSendDialog(QDialog):
         cform.addRow(preview_row)
         cform.addRow(
             self._label(
-                "所选品类将同时用于“一键完成”的 Step 1（AI 提取）与 Step 2（汇总洞察）。"
+                "确认后自动分析并生成报告，可在“分析记录”查看进度。"
             )
         )
         category.content_layout.addLayout(cform)
@@ -227,7 +227,7 @@ class AnalysisSendDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        self.confirm_btn = make_button("确认并进入分析", "primary")
+        self.confirm_btn = make_button("开始分析", "primary")
         self.confirm_btn.clicked.connect(self.accept)
         cancel_btn = make_button("取消")
         cancel_btn.clicked.connect(self.reject)
@@ -252,7 +252,7 @@ class AnalysisSendDialog(QDialog):
         self._count_value = count
         text = f"{count} 条（来源：{source}）"
         if cloud_error:
-            text += f"；云端回退原因：{cloud_error}"
+            text += f"；读取原因：{cloud_error}"
         self.count_label.setText(text)
         asin_list = list(asins)
         shown = ", ".join(asin_list[:8])
@@ -287,7 +287,9 @@ class AnalysisSendDialog(QDialog):
     def _on_category_changed(self, _index: int):
         key = self.category_combo.currentData()
         if key and key in self._templates:
-            self.summary_label.setText(template_summary_text(key, self._templates[key]))
+            entry = self._templates[key]
+            fields = [str(field.get("excel_col") or field.get("key") or "") for field in entry.get("fields", []) if isinstance(field, dict)]
+            self.summary_label.setText("、".join(fields))
             self.preview_btn.setEnabled(True)
         else:
             self.summary_label.setText("请先选择分析品类。")

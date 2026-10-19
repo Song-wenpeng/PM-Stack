@@ -1,7 +1,8 @@
 {
-  "version": "1.10.3",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.10.3/PM-Stack.exe",
-  "sha256": "1c61483646f790daeea3a4e89670cc8cf4f718f1529be2696b1c65fd7f5bb8c3",
-  "size": 136496797,
-  "notes": "新增：市场规划字段提取支持自动补抓五点描述与主副图（边抓边提取、解耦流水线、默认开启）；评论采集面板支持导出并一键发送到评论分析。"
+  "version": "v1.10.20",
+  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.10.20/PM-Stack.exe",
+  "sha256": "1d9660101a1406b62a7ebede87bba9bacd76fceca643c8166dfffd2e96f8a445",
+  "size": 134204307,
+  "mandatory": false,
+  "notes": "修复字段提取断点复用：恢复已有成果后重新检查所选字段，只补缺失项，保留有效值与人工修改；完整产品跳过网页补抓，未完整行保留断点，兼容旧版断点并保留历史识别日志。"
 }

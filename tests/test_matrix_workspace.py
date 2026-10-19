@@ -55,19 +55,22 @@ class MatrixWorkspaceTests(unittest.TestCase):
         self.assertEqual(w.table.viewport().property('matrixDropRole'), 'cards')
         self.assertEqual(next(iter(w.cells.values())).viewport().property('matrixDropRole'), 'cards')
 
-    def test_compact_resizable_panels(self):
+    def test_configuration_can_collapse_without_changing_matrix(self):
         w = self.widget
         w.resize(1300, 800)
         w.show()
         self.app.processEvents()
         self.assertLessEqual(w.workspace_split.sizes()[0], 210)
-        self.assertLessEqual(w.canvas_split.sizes()[0], 200)
-        self.assertGreater(w.matrix_split.sizes()[1], 700)
-        w.canvas_split.setSizes([230, 450])
-        w.matrix_split.setSizes([240, 850])
+        original_cells = dict(w.cells)
+        preview_width = w.table.width()
+        w.config_toggle.click()
         self.app.processEvents()
-        self.assertGreater(w.canvas_split.sizes()[0], 200)
-        self.assertGreater(w.matrix_split.sizes()[0], 200)
+        self.assertFalse(w.config_scroll.isVisible())
+        self.assertGreater(w.table.width(), preview_width)
+        self.assertEqual(w.cells, original_cells)
+        w.config_toggle.click()
+        self.app.processEvents()
+        self.assertTrue(w.config_scroll.isVisible())
         self.assertEqual(w.card_summary.text(), '卡片字段')
         self.assertNotIn('勾选', w.vertical.value_title.text())
 

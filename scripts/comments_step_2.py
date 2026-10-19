@@ -26,6 +26,10 @@ import pandas as pd
 from openai import OpenAI
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+try:
+    from scripts.comment_report import enhance_report
+except ModuleNotFoundError:
+    from comment_report import enhance_report
 
 # ================= 环境变量配置 =================
 API_ENV_NAME = os.getenv("API_ENV_NAME", "SILICONFLOW_API_KEY")
@@ -454,7 +458,13 @@ def merge_sheets(input_file: str, target_sheets: List[str]) -> pd.DataFrame:
                     df = df.loc[~failed_mask].copy()
                 # 状态列仅用于 Step 1 质量门槛，不进入正式汇总结果。
                 df = df.drop(columns=["_处理状态"])
-            df["星级"] = sheet
+            # Normalized review inputs carry row-level ratings. Only fall back
+            # to the sheet name when the source has no usable rating value.
+            if "星级" not in df.columns:
+                df["星级"] = sheet
+            else:
+                missing = df["星级"].isna() | df["星级"].astype(str).str.strip().eq("")
+                df["星级"] = df["星级"].astype(object).where(~missing, sheet)
             dfs.append(df)
     return pd.concat(dfs, ignore_index=True)
 
@@ -1197,6 +1207,15 @@ def save_results(merged_df: pd.DataFrame, raw_stats: Dict, ai_results: Dict, out
         secondary_df.to_excel(writer, sheet_name="二级主题汇总", index=False)
 
     auto_width_excel(output_file)
+    field_roles = {
+        field: strategy_to_taxonomy_type(get_field_strategy(field, product_config))
+        for field in ai_results
+    }
+    enhance_report(
+        output_file,
+        product_name=product_config.get("display_name", CURRENT_PRODUCT),
+        field_roles=field_roles,
+    )
 
 
 # ================= 主函数 =================

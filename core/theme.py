@@ -80,7 +80,7 @@ DARK = {
     "warning_dim": "rgba(240, 163, 94, 0.12)",
     "text": "#E8EAED",
     "text2": "#9BA1AB",
-    "text3": "#5F6672",
+    "text3": "#8791A0",
     "text_on_accent": "#FFFFFF",
     "popup_bg": "#1A1F27",
     "popup_hover": "#242B36",
@@ -178,8 +178,39 @@ def _ensure_check_icons(accent: str, box_bg: str) -> str:
     return path
 
 
+def _ensure_chevron_icon(color: str, direction: str = "down") -> str:
+    """Render a crisp open chevron; Qt QSS does not support CSS border triangles."""
+    from PyQt6.QtGui import QImage, QPainter, QPainterPath, QPen, QColor
+    from PyQt6.QtCore import Qt
+
+    cache_dir = os.path.join(tempfile.gettempdir(), "pm_stack_theme")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, f"chevron_{direction}_{color.lstrip('#')}_v1.png")
+    if not os.path.exists(path):
+        img = QImage(32, 32, QImage.Format.Format_ARGB32)
+        img.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(color), 3.0, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        shape = QPainterPath()
+        outer_y, middle_y = (19, 11) if direction == "up" else (12, 20)
+        shape.moveTo(7, outer_y)
+        shape.lineTo(16, middle_y)
+        shape.lineTo(25, outer_y)
+        painter.drawPath(shape)
+        painter.end()
+        if not img.save(path, "PNG"):
+            raise OSError(f"无法生成下拉箭头图标：{path}")
+    return path.replace("\\", "/")
+
+
 def build_qss(t):
     check_icon = _ensure_check_icons(t["accent"], t["input"]).replace("\\", "/")
+    down_icon = _ensure_chevron_icon(t["text2"])
+    up_icon = _ensure_chevron_icon(t["text2"], "up")
+    disabled_down_icon = _ensure_chevron_icon(t["text3"])
+    disabled_up_icon = _ensure_chevron_icon(t["text3"], "up")
     return f"""
 /* ===== 全局 ===== */
 QWidget {{
@@ -194,26 +225,33 @@ QLabel {{
     color: {t['text']};
 }}
 
-/* ===== 导航栏（左侧窄图标栏） ===== */
-QWidget#NavRail {{
+/* ===== 顶部模块导航 ===== */
+QWidget#NavBar {{
     background-color: {t['surface']};
-    border-right: 1px solid {t['border']};
+    border-bottom: 1px solid {t['border']};
 }}
-QLabel#NavBrand {{
-    background-color: {t['accent_dim']};
-    color: {t['accent']};
-    border-radius: 10px;
-    font-size: 18px;
-    font-weight: 800;
+QScrollArea#NavScroll, QWidget#NavItems {{
+    background-color: {t['surface']};
+    border: none;
 }}
 QToolButton#NavItem {{
     background-color: transparent;
-    border: none;
-    border-radius: 10px;
-    padding: 6px;
+    border: 1px solid transparent;
+    border-radius: 19px;
+    padding: 0 16px;
+    color: {t['text2']};
+    font-size: 13px;
+    text-align: center;
 }}
 QToolButton#NavItem:hover {{ background-color: {t['secondary_hover']}; }}
-QToolButton#NavItem:checked {{ background-color: {t['accent_dim']}; }}
+QToolButton#NavItem:checked {{
+    background-color: {t['accent']};
+    color: {t['text_on_accent']};
+    font-weight: 600;
+}}
+QToolButton#NavItem:checked:hover {{ background-color: {t['accent_hover']}; }}
+QToolButton#NavItem:focus {{ border: 1px solid {t['accent_border']}; }}
+QToolButton#NavUtility {{ color: {t['text2']}; }}
 QToolButton#NavUtility {{
     background-color: transparent;
     border: none;
@@ -221,11 +259,6 @@ QToolButton#NavUtility {{
     padding: 6px;
 }}
 QToolButton#NavUtility:hover {{ background-color: {t['secondary_hover']}; }}
-QFrame#NavSeparator {{
-    background-color: {t['border']};
-    max-height: 1px;
-    border: none;
-}}
 
 /* ===== 顶部标题栏 ===== */
 QWidget#Header {{
@@ -267,12 +300,45 @@ QLabel#CardTitle {{
     font-weight: 600;
 }}
 QLabel#CardSubtitle {{
-    color: {t['text3']};
+    color: {t['text2']};
     font-size: 12px;
 }}
 QLabel#CardHintIcon {{
     color: {t['text3']};
     font-size: 12px;
+}}
+QFrame#ActionBar {{
+    background-color: {t['surface']};
+    border-top: 1px solid {t['border']};
+}}
+QPushButton[buttonType="task"] {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+}}
+QPushButton[buttonType="task"]:checked {{
+    background-color: {t['accent_dim']};
+    border-color: {t['accent_border']};
+    color: {t['accent']};
+}}
+QWidget#MatrixPanel {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+QWidget#MatrixDropZone {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+QWidget#MatrixDropZone[dropActive="true"] {{
+    background-color: {t['accent_dim']};
+    border-color: {t['accent']};
+}}
+QListWidget#MatrixCards::item {{
+    padding: 10px;
+    margin: 4px;
+    border: 1px solid {t['border']};
+    border-radius: 6px;
 }}
 
 /* ===== 按钮 ===== */
@@ -355,13 +421,13 @@ QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabl
 QLineEdit::placeholder {{ color: {t['text3']}; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid {t['text3']};
-    margin-right: 8px;
+    image: url("{down_icon}");
+    width: 16px;
+    height: 16px;
+    border: none;
+}}
+QComboBox::down-arrow:disabled {{
+    image: url("{disabled_down_icon}");
 }}
 QComboBox QAbstractItemView {{
     background-color: {t['popup_bg']};
@@ -380,20 +446,22 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {{
     width: 20px;
 }}
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid {t['text2']};
+    image: url("{up_icon}");
+    width: 12px;
+    height: 12px;
+    border: none;
 }}
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {t['text2']};
+    image: url("{down_icon}");
+    width: 12px;
+    height: 12px;
+    border: none;
+}}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{
+    image: url("{disabled_up_icon}");
+}}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+    image: url("{disabled_down_icon}");
 }}
 
 /* ===== Tab（分段式） ===== */
@@ -504,6 +572,11 @@ QCheckBox::indicator:checked {{
 
 /* ===== 提示文字 ===== */
 QLabel#FormHint {{ color: {t['text3']}; font-size: 12px; background: transparent; }}
+QLabel#FieldError {{ color: {t['danger']}; font-size: 12px; background: transparent; }}
+QWidget#FieldGroup, QWidget#AdvancedFields {{ background: transparent; }}
+QLineEdit[validationError="true"], QComboBox[validationError="true"] {{
+    border: 1px solid {t['danger']};
+}}
 QLabel#ErrorText {{ color: {t['danger']}; font-size: 12px; background: transparent; }}
 
 /* ===== 状态栏 ===== */

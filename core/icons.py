@@ -133,7 +133,6 @@ _PAINTERS = {
 MODULE_ICONS = {
     "评论分析": "chat",
     "销量数据": "bars",
-    "自适应图表": "trend",
     "市场规划": "target",
     "品类信息": "cards",
     "产品矩阵": "grid",

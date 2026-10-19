@@ -107,7 +107,7 @@ def import_legacy_database(
                 reviews_imported += new_count
                 if normalized:
                     now = utc_now()
-                    destination.enqueue_collection(
+                    destination.record_collection(
                         asin,
                         marketplace,
                         product.get("title") or "",

@@ -1,4 +1,4 @@
-"""Amazon review collection, local cache, and cloud synchronization."""
+"""Amazon review collection, local database, backup, and recovery."""
 
 from .repository import ReviewRepository
 from .store import ReviewStore

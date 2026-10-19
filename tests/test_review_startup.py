@@ -65,7 +65,7 @@ class ReviewStartupTests(unittest.TestCase):
             collect_product(store, scraper, "B0DDG2KQQ9", "amazon.com", 1, 1, False)
         self.assertIs(raised.exception, original)
         self.assertEqual(store.log_run.call_args.args[4], "failed")
-        store.enqueue_collection.assert_called_once()
+        store.record_collection.assert_called_once()
 
 
 if __name__ == "__main__":

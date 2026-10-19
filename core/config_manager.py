@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "auto_check_update": True,
     "current_version": "v1.10.2",
     "theme": "light",
+    "nav_expanded": True,
 }
 
 SECRET_KEYS = ("api_key", "vision_api_key")
@@ -224,6 +225,12 @@ class ConfigManager:
         Returns:
             配置文件的绝对路径
         """
+        restored = os.path.join(os.path.dirname(self._path), filename)
+        if os.path.exists(restored):
+            return restored
+        restored = os.path.join(os.path.dirname(self._path), filename)
+        if os.path.exists(restored):
+            return restored
         if getattr(sys, 'frozen', False):
             # EXE 模式：优先读 EXE 旁边的用户版本
             user_path = os.path.join(os.path.dirname(sys.executable), filename)

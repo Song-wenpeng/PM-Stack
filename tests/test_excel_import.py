@@ -11,7 +11,6 @@ from core.reviews.excel_import import read_import, import_reviews, extract_label
 from core.reviews.metadata import latest_analysis, KEY, merge_payload
 from core.reviews.store import ReviewStore
 from core.reviews.repository import ReviewRepository
-from core.reviews.cloud import SupabaseStore
 
 ASIN="B0DDG2KQQ9"
 CONFIG={"product_desc":"Power strips","tasks":["提取优缺点"],
@@ -77,14 +76,8 @@ class ExcelImportTests(unittest.TestCase):
         self.assertEqual(import_reviews(self.store,data),(0,1))
         row=self.store.query_reviews()[0]
         self.assertEqual(latest_analysis(row)["labels"]["positive"],["好用"])
-        self.assertGreaterEqual(self.store.outbox_stats()["pending"],2)
-        fake=Mock()
-        repo=ReviewRepository(self.store); repo.cloud=fake
-        result=repo.sync_pending()
-        self.assertFalse(result["error"])
-        for call in fake.ingest_batch.call_args_list:
-            reviews=call.args[0]["reviews"]
-            self.assertTrue(reviews[0]["raw_payload"][KEY]["analyses"])
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0],0)
+        self.assertEqual(latest_analysis(ReviewRepository(self.store).query_reviews()[0][0])["labels"]["positive"],["好用"])
 
     def test_failed_or_cancelled_model_never_marks_success(self):
         data=self.data(); import_reviews(self.store,data)
@@ -107,19 +100,6 @@ class ExcelImportTests(unittest.TestCase):
         raw=json.loads(self.store.query_reviews()[0]["raw_json"])
         self.assertEqual(len(raw[KEY]["analyses"]),2)
 
-    def test_cloud_ingest_preserves_remote_metadata(self):
-        cloud=object.__new__(SupabaseStore)
-        cloud.workspace_id="workspace"
-        cloud.review_metadata=lambda ids:[{"marketplace":"amazon.com","review_id":"RTEST0001",
-            "raw_payload":{KEY:{"analyses":{"old":{"status":"success"}}}}}]
-        cloud.client=Mock()
-        cloud.client.rpc.return_value.execute.return_value=SimpleNamespace(data={"reviews":1})
-        data=self.data()
-        cloud.ingest_batch({"product":{"asin":ASIN,"marketplace":"amazon.com"},
-                            "reviews":data["rows"]},"receipt")
-        sent=cloud.client.rpc.call_args.args[1]["p_reviews"][0]["raw_payload"]
-        self.assertIn("old",sent[KEY]["analyses"])
-        self.assertTrue(sent[KEY]["imports"])
 
     def test_same_id_conflicting_body_rejected(self):
         w=Workbook();s=w.active;s.append(["内容","星级","评论ID"])

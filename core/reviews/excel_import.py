@@ -141,19 +141,9 @@ def save_analysis(store, asin, marketplace, review_id, analysis_id, analysis):
         raise ValueError("评论正文已变化，请重新提取")
     raw = merge_payload(row["raw_json"], {KEY:{"analyses":{analysis_id:analysis}}})
     row["raw_payload"] = raw
-    normalized = normalize_reviews(asin,marketplace,[row])
-    payload = {"product":{"asin":asin,"marketplace":marketplace,"title":""},
-               "reviews":normalized,"run":{}}
-    key = hashlib.sha256(("labels:"+marketplace+":"+review_id+":"+analysis_id).encode()).hexdigest()
-    now = utc_now()
-    # Annotation + upload queue committed together, including cancellation/crash recovery.
     with store.conn:
         store.conn.execute("UPDATE reviews SET raw_json=? WHERE marketplace=? AND review_id=?",
                            (json_dumps(raw),marketplace,review_id))
-        store.conn.execute("""INSERT INTO outbox
-            (idempotency_key,entity_type,payload_json,status,created_at,updated_at)
-            VALUES (?, 'review_batch', ?, 'pending', ?, ?)
-            ON CONFLICT(idempotency_key) DO NOTHING""",(key,json_dumps(payload),now,now))
 
 def extract_labels(store, data, category, config, env, *, stop=lambda:False, log=lambda msg:None, gateway=None):
     from scripts.comments_step_1_fast import build_prompt, extract_json_object

@@ -12,7 +12,6 @@ from core.reviews.excel_import import extract_labels
 from core.reviews.metadata import latest_analysis
 from core.reviews.store import ReviewStore
 from modules.comment_analysis import ModuleWidget
-from modules.comment_analysis_test import ModuleWidget as FastModule
 from scripts.comments_step_1_fast import build_prompt
 
 class GeneralCategoryTests(unittest.TestCase):
@@ -28,10 +27,7 @@ class GeneralCategoryTests(unittest.TestCase):
         support.qt_app()
         self.addCleanup(support.cleanup_qt_widgets)
         widget = ModuleWidget(self.manager, ScriptRunner())
-        fast = FastModule(self.manager, ScriptRunner())
-        for combo in (widget.s1_product, widget.s2_product, widget.s12_product,
-                      widget.batch_product, widget.review_collection.excel_options.category,
-                      fast.product_combo):
+        for combo in (widget.product_combo, widget.review_collection.excel_options.category):
             index = combo.findData('general')
             self.assertGreaterEqual(index, 0)
             combo.setCurrentIndex(index)
@@ -66,7 +62,7 @@ class GeneralCategoryTests(unittest.TestCase):
         rows = store.query_reviews()
         self.assertEqual(latest_analysis(rows[0])['category'], 'general')
         self.assertEqual(latest_analysis(rows[0])['labels'], labels)
-        self.assertGreater(store.outbox_stats()['pending'], 0)
+        self.assertEqual(store.conn.execute('SELECT COUNT(*) FROM outbox').fetchone()[0], 0)
         target = self.root / 'general.xlsx'
         export_review_details(rows, str(target))
         book = load_workbook(target)

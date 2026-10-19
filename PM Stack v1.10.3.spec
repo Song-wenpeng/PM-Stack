@@ -33,6 +33,9 @@ a = Analysis(
     hiddenimports=[
         'PyQt6.QtNetwork',
         'core.matrix_workspace',
+        'core.field_workbook',
+        'core.field_templates',
+        'modules.field_template_panel',
         'pandas',
         'openpyxl',
         'xlsxwriter',
@@ -76,6 +79,14 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Directory data entries can include local __pycache__ files from past builds.
+# Keep only source/resources so removed modules cannot linger in the EXE.
+a.datas = [
+    item for item in a.datas
+    if '__pycache__' not in item[0].replace('\\', '/').split('/')
+    and not item[0].lower().endswith('.pyc')
+]
 
 # Qt 6 resolves Windows' system ICU.  Some developer shells add an unrelated
 # Poppler ICU build to PATH; PyInstaller may collect that as a root-level DLL,

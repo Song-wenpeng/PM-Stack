@@ -18,11 +18,58 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
     QTextEdit, QLabel, QFrame, QWidget, QComboBox, QStyledItemDelegate,
+    QTabWidget, QScrollArea,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPalette
 
 from .theme import THEME, MONO_FAMILY
+
+
+class ScrollTabs(QTabWidget):
+    """Scroll long forms independently without expanding every tab to their height."""
+
+    def addTab(self, widget, *args):
+        if not widget.property("workspacePage"):
+            scroll = QScrollArea()
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(widget)
+            widget = scroll
+        return super().addTab(widget, *args)
+
+
+class ActionBar(QFrame):
+    """A stable action area outside a page's scrolling form."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ActionBar")
+        self.row = QHBoxLayout(self)
+        self.row.setContentsMargins(18, 12, 18, 12)
+        self.row.setSpacing(12)
+        self.summary = QLabel()
+        self.summary.setObjectName("FormHint")
+        self.summary.setWordWrap(True)
+        self.row.addWidget(self.summary, 1)
+
+
+def collapsible_log(layout, log):
+    """Keep diagnostics available while reserving the idle page for the task."""
+    toggle = make_button("查看运行日志", "ghost")
+    toggle.setCheckable(True)
+    toggle.toggled.connect(log.setVisible)
+    toggle.toggled.connect(lambda shown: toggle.setText(
+        "收起运行日志" if shown else "查看运行日志"))
+    def reveal_errors():
+        last = log.text.document().lastBlock().text()
+        if any(word in last for word in ('错误', '失败', '[提示]', 'Traceback', 'Error')):
+            toggle.setChecked(True)
+    log.text.textChanged.connect(reveal_errors)
+    log.hide()
+    layout.addWidget(toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+    layout.addWidget(log)
+    return toggle
 
 
 # ============================================================
@@ -37,6 +84,24 @@ def make_button(text, role="secondary", tooltip=""):
     if tooltip:
         btn.setToolTip(tooltip)
     return btn
+
+
+def action_row(*buttons, primary_width=170):
+    """主操作按钮行：固定宽度、右对齐，避免按钮被表单拉满整行。
+
+    用法:
+        run_btn = make_button("执行拆分", "primary")
+        form.addRow(action_row(run_btn))            # 单个主按钮
+        form.addRow(action_row(run_btn, stop_btn))  # 主按钮 + 次按钮
+    """
+    row = QHBoxLayout()
+    row.setSpacing(10)
+    row.addStretch()
+    for btn in buttons:
+        if btn.property("buttonType") == "primary":
+            btn.setFixedWidth(primary_width)
+        row.addWidget(btn)
+    return row
 
 
 def set_running_state(btn, running, idle_text=None, running_text="⏳ 运行中..."):
@@ -195,10 +260,16 @@ def configure_combo(combo, max_visible=8):
             painter.save()
             painter.fillRect(option.rect, bg)
             text = index.data(Qt.ItemDataRole.DisplayRole)
+            icon = index.data(Qt.ItemDataRole.DecorationRole)
+            text_left = 10
+            if icon is not None and not icon.isNull():
+                icon.paint(painter, option.rect.x() + 10,
+                           option.rect.center().y() - 8, 16, 16)
+                text_left = 32
             if text:
                 painter.setPen(fg)
                 painter.drawText(
-                    option.rect.adjusted(10, 0, -6, 0),
+                    option.rect.adjusted(text_left, 0, -6, 0),
                     int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
                     str(text),
                 )
@@ -277,8 +348,13 @@ def browse_file(line_edit, parent=None, caption="选择文件",
 
 
 def browse_save_file(line_edit, parent=None, caption="选择输出文件",
-                     filter_str="Excel (*.xlsx)"):
-    path, _ = QFileDialog.getSaveFileName(parent, caption, "", filter_str)
+                     filter_str="Excel (*.xlsx)", confirm_overwrite=True):
+    if confirm_overwrite:
+        path, _ = QFileDialog.getSaveFileName(parent, caption, "", filter_str)
+    else:
+        path, _ = QFileDialog.getSaveFileName(
+            parent, caption, "", filter_str,
+            options=QFileDialog.Option.DontConfirmOverwrite)
     if path:
         line_edit.setText(path)
     return path
@@ -301,6 +377,10 @@ def file_row(line_edit, mode="open", caption="选择文件",
     elif mode == "save":
         btn.clicked.connect(
             lambda: browse_save_file(line_edit, parent, caption, filter_str))
+    elif mode == "save_no_confirm":
+        btn.clicked.connect(
+            lambda: browse_save_file(line_edit, parent, caption, filter_str,
+                                     confirm_overwrite=False))
     else:
         btn.clicked.connect(lambda: browse_dir(line_edit, parent, caption))
     row = QHBoxLayout()

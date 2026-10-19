@@ -32,3 +32,21 @@ Thumbs.db
 .review-local/
 .runtime-local/
 .venv-review/
+
+# Private one-time cloud migration data
+未来开发方向/云端同步/数据迁移留存/
+
+# 本机工作记录、临时任务与展示产物（不进入源码发布）
+/AGENTS.md
+*.log
+*.checkpoint.json
+*.fetch_checkpoint.json
+*.pending-*.xlsx
+.env
+.env.*
+/PM Stack_*/
+/PM Stack_*.zip
+/PM Stack_*.html
+/assets/icon_candidates/
+/tools/local_backup_*.py
+/评论分析报告_样本验证.xlsx

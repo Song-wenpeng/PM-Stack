@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""主窗口 — 窄图标导航栏 + 顶部标题栏 + 内容区 + 双主题
+"""主窗口 — 顶部模块导航 + 页面标题栏 + 独立页面滚动 + 双主题
 
 布局:
-    ┌────┬──────────────────────────┐
-    │ 导 │  页面标题 + 副标题 + 徽章 │
-    │ 航 ├──────────────────────────┤
-    │ 栏 │  模块内容区（滚动）       │
-    └────┴──────────────────────────┘
+    ┌────────────────────────────────┐
+    │ 模块导航              主题/设置 │
+    ├────────────────────────────────┤
+    │ 页面标题 + 副标题 + 徽章         │
+    │ 模块内容区（滚动）               │
+    └────────────────────────────────┘
 """
 
 import os
@@ -17,7 +18,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStatusBar, QDialog, QFormLayout, QLineEdit, QDialogButtonBox,
     QGroupBox, QMessageBox, QCheckBox, QScrollArea, QStackedWidget,
-    QToolButton, QButtonGroup, QFrame, QApplication,
+    QToolButton, QButtonGroup, QFrame, QApplication, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QScreen, QShortcut, QKeySequence
@@ -31,7 +32,7 @@ from .app_updater import ApplicationUpdater, launch_updater_helper
 from .widgets import make_button, make_hint_label
 
 
-CURRENT_VERSION = "v1.10.3"
+CURRENT_VERSION = "v1.10.20"
 APP_NAME = "PM Stack"
 APP_TITLE = f"{APP_NAME} {CURRENT_VERSION}"
 
@@ -89,59 +90,59 @@ class MainWindow(QMainWindow):
     def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
+        main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ================= 左侧窄导航栏 =================
-        rail = QWidget()
-        rail.setObjectName("NavRail")
-        rail.setFixedWidth(64)
-        rail_layout = QVBoxLayout(rail)
-        rail_layout.setContentsMargins(0, 14, 0, 12)
-        rail_layout.setSpacing(6)
-        rail_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        # ================= 顶部横向模块导航 =================
+        self._nav_bar = QWidget()
+        self._nav_bar.setObjectName("NavBar")
+        nav_layout = QHBoxLayout(self._nav_bar)
+        nav_layout.setContentsMargins(24, 6, 24, 6)
+        nav_layout.setSpacing(8)
 
-        brand = QLabel("P")
-        brand.setObjectName("NavBrand")
-        brand.setFixedSize(38, 38)
-        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand.setToolTip(f"{APP_TITLE}\n电商数据分析工作台")
-        rail_layout.addWidget(brand, alignment=Qt.AlignmentFlag.AlignHCenter)
-        rail_layout.addSpacing(14)
-
-        self._rail_layout = rail_layout  # 模块按钮插入点（index 2 起）
+        # 插件较多时可横向滚动，右侧工具按钮始终可见。
+        self._nav_scroll = QScrollArea()
+        self._nav_scroll.setObjectName("NavScroll")
+        self._nav_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._nav_scroll.setWidgetResizable(True)
+        self._nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._nav_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._nav_scroll.setFixedHeight(52)
+        self._nav_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        nav_items = QWidget()
+        nav_items.setObjectName("NavItems")
+        self._nav_layout = QHBoxLayout(nav_items)
+        self._nav_layout.setContentsMargins(0, 0, 0, 0)
+        self._nav_layout.setSpacing(6)
+        self._nav_layout.addStretch()
+        self._nav_scroll.setWidget(nav_items)
+        nav_layout.addWidget(self._nav_scroll, 1)
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         self._nav_group.idClicked.connect(self._switch_module)
 
-        rail_layout.addStretch()
-
         # 主题切换
         self._theme_btn = QToolButton()
         self._theme_btn.setObjectName("NavUtility")
-        self._theme_btn.setFixedSize(42, 42)
+        self._theme_btn.setFixedSize(38, 38)
+        self._theme_btn.setAccessibleName("切换主题")
         self._theme_btn.clicked.connect(self._toggle_theme)
-        rail_layout.addWidget(self._theme_btn,
-                              alignment=Qt.AlignmentFlag.AlignHCenter)
+        nav_layout.addWidget(self._theme_btn)
 
         # 设置
         settings_btn = QToolButton()
         settings_btn.setObjectName("NavUtility")
-        settings_btn.setFixedSize(42, 42)
+        settings_btn.setFixedSize(38, 38)
+        settings_btn.setAccessibleName("全局设置")
         settings_btn.setToolTip("设置（API / 更新 / 插件）")
         settings_btn.clicked.connect(self._open_settings)
-        rail_layout.addWidget(settings_btn,
-                              alignment=Qt.AlignmentFlag.AlignHCenter)
+        nav_layout.addWidget(settings_btn)
         self._settings_btn = settings_btn
 
-        ver = QLabel(CURRENT_VERSION)
-        ver.setObjectName("FormHint")
-        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rail_layout.addSpacing(4)
-        rail_layout.addWidget(ver)
+        main_layout.addWidget(self._nav_bar)
 
-        # ================= 右侧内容区 =================
+        # ================= 全宽内容区 =================
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -156,7 +157,7 @@ class MainWindow(QMainWindow):
 
         self.page_title = QLabel(APP_NAME)
         self.page_title.setObjectName("PageTitle")
-        self.page_subtitle = QLabel("选择左侧模块开始处理数据")
+        self.page_subtitle = QLabel("选择顶部模块开始处理数据")
         self.page_subtitle.setObjectName("PageSubtitle")
         self.page_subtitle.setWordWrap(True)
 
@@ -165,8 +166,7 @@ class MainWindow(QMainWindow):
         title_col.setSpacing(2)
         title_col.addWidget(self.page_title)
         title_col.addWidget(self.page_subtitle)
-        header_layout.addLayout(title_col)
-        header_layout.addStretch()
+        header_layout.addLayout(title_col, 1)
 
         self.api_badge = QLabel()
         self.api_badge.setObjectName("ApiBadge")
@@ -174,15 +174,10 @@ class MainWindow(QMainWindow):
             self.api_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
         content_layout.addWidget(header)
 
-        # 模块内容区（滚动适配小屏）
+        # 模块工作区：页面各自管理滚动，底部操作不随长表单移出窗口。
         self.stack = QStackedWidget()
-        self.content_scroll = QScrollArea()
-        self.content_scroll.setWidgetResizable(True)
-        self.content_scroll.setWidget(self.stack)
-        self.content_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        content_layout.addWidget(self.content_scroll)
+        content_layout.addWidget(self.stack)
 
-        main_layout.addWidget(rail)
         main_layout.addWidget(content, stretch=1)
 
         # 状态栏
@@ -219,8 +214,8 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self._nav_buttons):
             name = self._modules[i][0].get("name", "")
             fallback = self._modules[i][0].get("icon", "")
-            color = t["accent"] if btn.isChecked() else t["text3"]
-            btn.setIcon(get_module_icon(name, color, 21, fallback))
+            color = t["text_on_accent"] if btn.isChecked() else t["text2"]
+            btn.setIcon(get_module_icon(name, color, 18, fallback))
 
     # ================================================================
     # 模块加载（内置 + 插件）
@@ -247,46 +242,40 @@ class MainWindow(QMainWindow):
             unique.append((info, widget_cls))
         unique.sort(key=lambda x: x[0].get("order", 99))
 
-        # 按分类分组（窄导航栏中以细分隔线区分）
-        grouped = {}
-        for info, widget_cls in unique:
-            grouped.setdefault(info.get("category", "其他"), []).append(
-                (info, widget_cls))
-
-        insert_pos = 2  # brand + spacing 之后
         first_btn = None
-        for gi, (_cat, items) in enumerate(grouped.items()):
-            if gi > 0:
-                sep = QFrame()
-                sep.setObjectName("NavSeparator")
-                sep.setFixedSize(24, 1)
-                self._rail_layout.insertWidget(
-                    insert_pos, sep, alignment=Qt.AlignmentFlag.AlignHCenter)
-                insert_pos += 1
-                self._rail_layout.insertSpacing(insert_pos, 2)
-                insert_pos += 1
-            for info, widget_cls in items:
-                runner = ScriptRunner(self)
-                self._module_runners.append(runner)
-                widget = widget_cls(self.config_mgr, runner)
-                index = self.stack.count()
-                self._modules.append((info, widget))
+        for info, widget_cls in unique:
+            runner = ScriptRunner(self)
+            self._module_runners.append(runner)
+            widget = widget_cls(self.config_mgr, runner)
+            index = self.stack.count()
+            self._modules.append((info, widget))
+            # Workspaces own their scrolling and keep actions in view.
+            if widget.property("workspacePage"):
                 self.stack.addWidget(widget)
+            else:
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.Shape.NoFrame)
+                scroll.setWidget(widget)
+                self.stack.addWidget(scroll)
 
-                btn = QToolButton()
-                btn.setObjectName("NavItem")
-                btn.setFixedSize(44, 44)
-                btn.setCheckable(True)
-                name = info.get("name", "未知")
-                desc = info.get("description", "")
-                btn.setToolTip(f"{name}\n{desc}" if desc else name)
-                self._nav_group.addButton(btn, index)
-                self._nav_buttons.append(btn)
-                self._rail_layout.insertWidget(
-                    insert_pos, btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-                insert_pos += 1
-                if first_btn is None:
-                    first_btn = btn
+            btn = QToolButton()
+            btn.setObjectName("NavItem")
+            btn.setFixedHeight(38)
+            btn.setMinimumWidth(116)
+            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            btn.setCheckable(True)
+            name = info.get("name", "未知")
+            btn.setText(name)
+            btn.setAccessibleName(name)
+            desc = info.get("description", "")
+            btn.setToolTip(f"{name}\n{desc}" if desc else name)
+            self._nav_group.addButton(btn, index)
+            self._nav_buttons.append(btn)
+            self._nav_layout.insertWidget(self._nav_layout.count() - 1, btn)
+            if first_btn is None:
+                first_btn = btn
 
         if first_btn is not None:
             first_btn.setChecked(True)
@@ -323,6 +312,8 @@ class MainWindow(QMainWindow):
         btn = self._nav_group.button(index)
         if btn and not btn.isChecked():
             btn.setChecked(True)
+        if btn:
+            self._nav_scroll.ensureWidgetVisible(btn, 8, 0)
         info = self._modules[index][0]
         self.page_title.setText(info.get("name", APP_NAME))
         self.page_subtitle.setText(info.get("description", ""))
