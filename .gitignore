@@ -36,8 +36,8 @@ Thumbs.db
 # Private one-time cloud migration data
 未来开发方向/云端同步/数据迁移留存/
 
-# 本机工作记录、临时任务与展示产物（不进入源码发布）
-/AGENTS.md
+# AGENTS.md、CURRENT.md、handoffs/ 随源码管理；私有运行数据仍排除
+# 本机临时任务与展示产物（不进入源码发布）
 *.log
 *.checkpoint.json
 *.fetch_checkpoint.json
