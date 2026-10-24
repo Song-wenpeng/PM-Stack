@@ -258,6 +258,13 @@ class ModuleWidget(QWidget):
         from core.matrix_workspace import MatrixWorkspace
         self.free_matrix = MatrixWorkspace(self)
         tabs.addTab(self.free_matrix, "自由组合矩阵")
+        self.matrix_tabs = tabs
+
+    def open_dashboard_source(self, path):
+        self.free_matrix.path.setText(path)
+        self.free_matrix.sheets.setCurrentText('看板商品')
+        self.free_matrix.read_data()
+        self.matrix_tabs.setCurrentWidget(self.free_matrix)
 
     def _update_matrix_options(self, *_):
         attrs = [x for x in self.m3_attrs.text().split(',') if x.strip()]

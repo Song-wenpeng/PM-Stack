@@ -318,6 +318,71 @@ def load_data(file_path, meta_sheet, data_sheet, group_col, filter_exprs):
 # 图表绘制
 # ============================================================
 
+def smooth_monthly_points(x, values, samples=20):
+    """Shape-preserving cubic Hermite connection; never average monthly values.
+
+    Each finite run is independent, so missing months remain gaps. Markers index
+    only original observations, not the interpolated drawing samples.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(values, dtype=float)
+    if x.ndim != 1 or y.shape != x.shape or np.any(np.diff(x) <= 0):
+        raise ValueError('Months must be increasing and match the values')
+    if samples < 2:
+        raise ValueError('At least two drawing samples are required')
+    out_x, out_y, markers = [], [], []
+    start = 0
+    while start < len(y):
+        if not np.isfinite(y[start]):
+            out_x.append(x[start])
+            out_y.append(np.nan)
+            start += 1
+            continue
+        end = start + 1
+        while end < len(y) and np.isfinite(y[end]):
+            end += 1
+        xx, yy = x[start:end], y[start:end]
+        n = len(yy)
+        slopes = np.zeros(n)
+        if n > 1:
+            h = np.diff(xx)
+            delta = np.diff(yy) / h
+            slopes[0], slopes[-1] = delta[0], delta[-1]
+            if n > 2:
+                for j in range(1, n - 1):
+                    if delta[j - 1] * delta[j] > 0:
+                        w1, w2 = 2 * h[j] + h[j - 1], h[j] + 2 * h[j - 1]
+                        slopes[j] = (w1 + w2) / (w1 / delta[j - 1] + w2 / delta[j])
+                for k, d0, d1, h0, h1 in (
+                    (0, delta[0], delta[1], h[0], h[1]),
+                    (-1, delta[-1], delta[-2], h[-1], h[-2]),
+                ):
+                    slope = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1)
+                    slopes[k] = 0 if slope * d0 <= 0 else np.sign(d0) * min(abs(slope), 3 * abs(d0))
+            for j in range(n - 1):
+                markers.append(len(out_x))
+                t = np.arange(samples) / samples
+                vals = ((2*t**3 - 3*t**2 + 1) * yy[j]
+                        + (t**3 - 2*t**2 + t) * h[j] * slopes[j]
+                        + (-2*t**3 + 3*t**2) * yy[j + 1]
+                        + (t**3 - t**2) * h[j] * slopes[j + 1])
+                out_x.extend(xx[j] + t * h[j])
+                out_y.extend(vals)
+        markers.append(len(out_x))
+        out_x.append(xx[-1])
+        out_y.append(yy[-1])
+        start = end
+    return np.asarray(out_x), np.asarray(out_y), markers
+
+
+def plot_monthly_curve(ax, x, values, **style):
+    """Draw a smooth connection with visible markers at actual months only."""
+    curve_x, curve_y, markers = smooth_monthly_points(x, values)
+    return ax.plot(curve_x, curve_y, markevery=markers,
+                   solid_capstyle='round', solid_joinstyle='round',
+                   dash_capstyle='round', dash_joinstyle='round', **style)
+
+
 def make_chart(groups, df_data, group_col, aggregate, merge_threshold,
                output_path, dpi, show, font_name, filter_exprs=None, data_label='子体销量'):
     """绘制分组聚合趋势图。"""
@@ -364,7 +429,7 @@ def make_chart(groups, df_data, group_col, aggregate, merge_threshold,
         color = COLORS[gi % len(COLORS)]
         n = len(final_groups[g])
         vals = group_series[g]
-        ax.plot(x, vals, color=color, linewidth=2.8, marker='o', markersize=5,
+        plot_monthly_curve(ax, x, vals, color=color, linewidth=2.8, marker='o', markersize=5,
                 markeredgecolor='white', markeredgewidth=1.2, zorder=5,
                 label=f'{g} (n={n})')
 
@@ -488,7 +553,7 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
                 agg_1 = grp_data_1.sum()
             else:
                 agg_1 = grp_data_1.mean()
-            ax1.plot(dates, agg_1.values, color=blue_cmap[i], linewidth=2.6,
+            plot_monthly_curve(ax1, range(len(dates)), agg_1.values, color=blue_cmap[i], linewidth=2.6,
                      marker='o', markersize=4, label=f'{name} ({label_1})')
 
         if valid_2 and not avg_price_only:
@@ -497,7 +562,7 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
                 agg_2 = grp_data_2.sum()
             else:
                 agg_2 = grp_data_2.mean()
-            ax2.plot(dates, agg_2.values, color=orange_cmap[i], linewidth=2,
+            plot_monthly_curve(ax2, range(len(dates)), agg_2.values, color=orange_cmap[i], linewidth=2,
                      linestyle='--', marker='s', markersize=3, label=f'{name} ({label_2})')
 
     # 月均价趋势线
@@ -519,7 +584,7 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
             if avg_price_only:
                 # 均价直接画在 ax2 上，替代销额
                 # 均价为辅助参考线：更细、无标记过大，避免抢主线视觉
-                line_avg, = ax2.plot(dates, avg_price.values, color='#10B981',
+                line_avg, = plot_monthly_curve(ax2, range(len(dates)), avg_price.values, color='#10B981',
                                      linewidth=1.4, linestyle='-.', marker='D',
                                      markersize=3, label='月均价')
                 ax2.set_ylabel('月均价', fontsize=AXIS_LABEL_FONTSIZE, labelpad=10,
@@ -536,7 +601,7 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
                 # 叠加模式：均价画在独立的 ax3 上
                 ax3 = ax1.twinx()
                 ax3.spines['right'].set_position(('outward', 60))
-                line3, = ax3.plot(dates, avg_price.values, color='#10B981', linewidth=1.4,
+                line3, = plot_monthly_curve(ax3, range(len(dates)), avg_price.values, color='#10B981', linewidth=1.4,
                                   linestyle='-.', marker='D', markersize=3, label='月均价')
                 ax3.set_ylabel('月均价', fontsize=AXIS_LABEL_FONTSIZE, labelpad=10,
                                color='#10B981', **font_kw)
@@ -559,6 +624,7 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
     ax1.tick_params(axis='y', colors='#3B82F6')
     if not avg_price_only:
         ax2.tick_params(axis='y', colors='#F59E0B')
+    ax1.set_xticks(range(len(dates)), dates)
     ax1.tick_params(axis='x', rotation=45)
 
     # 简洁风格：去框，只留底部轴线和浅横线
@@ -590,6 +656,10 @@ def make_dual_chart(groups, df_data_1, df_data_2, group_col, aggregate,
         title = f'{group_col}分组 — {label_1} vs {label_2}{agg_label}趋势'
     else:
         title = f'{label_1} vs {label_2}{agg_label}趋势'
+    if avg_price_only:
+        title = f'{label_1}{agg_label}与月均价趋势'
+        if group_col:
+            title = f'{group_col}分组 — {title}'
     if filter_exprs:
         filter_str = ' & '.join(filter_exprs)
         title = f'{filter_str} — {title}'

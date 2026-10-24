@@ -32,7 +32,7 @@ from .app_updater import ApplicationUpdater, launch_updater_helper
 from .widgets import make_button, make_hint_label
 
 
-CURRENT_VERSION = "v1.10.20"
+CURRENT_VERSION = "v1.11.5"
 APP_NAME = "PM Stack"
 APP_TITLE = f"{APP_NAME} {CURRENT_VERSION}"
 
@@ -277,6 +277,10 @@ class MainWindow(QMainWindow):
             if first_btn is None:
                 first_btn = btn
 
+        for info, widget in self._modules:
+            if info.get('name') == '展示看板':
+                widget.matrix_requested.connect(self._open_dashboard_matrix)
+
         if first_btn is not None:
             first_btn.setChecked(True)
             self._switch_module(self._nav_group.id(first_btn))
@@ -286,6 +290,13 @@ class MainWindow(QMainWindow):
             sc = QShortcut(QKeySequence(f"Ctrl+{idx + 1}"), self)
             sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
             sc.activated.connect(lambda i=idx: self._switch_module(i))
+
+    def _open_dashboard_matrix(self, path):
+        for index, (info, widget) in enumerate(self._modules):
+            if info.get('name') == '产品矩阵' and hasattr(widget, 'open_dashboard_source'):
+                widget.open_dashboard_source(path)
+                self._switch_module(index)
+                return
 
     def _scan_module_dir(self, modules_dir, discovered, source):
         if not os.path.isdir(modules_dir):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""PM Stack v1.10.20 — 字段提取断点补缺修复"""
+"""PM Stack v1.11.5 — 自动关联商品特征与历史销量"""
 
 import sys
 import os
@@ -41,6 +41,17 @@ def main():
         QMessageBox.warning(None, '本地备份恢复失败', f'恢复未完成，继续使用原数据。可在数据与备份中取消待恢复。\n{exc}')
     # 主题 QSS 由 MainWindow 按配置应用（明/暗双主题）
     window = MainWindow()
+    if '--dashboard-research-check' in sys.argv:
+        from core.dashboard_research_check import verify_research
+        position = sys.argv.index('--dashboard-research-check')
+        verify_research(window, sys.argv[position + 1], sys.argv[position + 2])
+        window.close()
+        return
+    if '--dashboard-check' in sys.argv:
+        from core.dashboard_smoke import check_dashboard
+        check_dashboard(window, sys.argv[sys.argv.index('--dashboard-check') + 1])
+        window.close()
+        return
     if '--sales-split-check' in sys.argv:
         from core.sales_smoke import check_sales_split
         check_sales_split(window, sys.argv[sys.argv.index('--sales-split-check') + 1])

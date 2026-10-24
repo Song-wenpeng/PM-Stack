@@ -80,7 +80,7 @@ class CleanLayoutTests(unittest.TestCase):
         self.app.processEvents()
         self.assertIsNone(self.window.findChild(QLabel, 'NavBrand'))
         buttons = self.window._nav_buttons
-        self.assertEqual([b.text() for b in buttons], ['评论分析', '销量数据', '产品矩阵', '市场规划'])
+        self.assertEqual([b.text() for b in buttons], ['评论分析', '销量数据', '产品矩阵', '市场规划', '展示看板'])
         self.assertEqual(len({b.mapTo(self.window, QPoint()).y() for b in buttons}), 1)
         self.assertEqual(self.window.stack.width(), self.window.centralWidget().width())
         for i, button in enumerate(buttons):

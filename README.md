@@ -1,8 +1,10 @@
 # PM Stack
 
-面向跨境电商运营与产品研究的 Windows 桌面工作台，基于 Python / PyQt6，提供评论分析、销量数据、产品矩阵和市场规划四个模块。
+面向跨境电商运营与产品研究的 Windows 桌面工作台，基于 Python / PyQt6，提供评论分析、销量数据、产品矩阵、市场规划和展示看板五个模块。
 
-当前版本：**v1.10.20**（2026-10-19）。
+当前版本：**v1.11.5**（2026-10-22）。
+
+- [新增展示看板：使用说明与统计口径](展示看板使用说明.md)
 
 - [下载最新版本](https://github.com/Song-wenpeng/PM-Stack/releases/latest)
 - [本阶段更新说明：v1.10.3 → v1.10.20](阶段更新说明-v1.10.20.md)
@@ -17,8 +19,9 @@
 | 销量数据 | 单文件与批量拆分、销量/销额修正、历史数据提取、交叉属性趋势与品牌/类别份额 |
 | 产品矩阵 | 场景图片矩阵、销额透视、品牌×分类矩阵、自由组合矩阵与导出 |
 | 市场规划 | 文本及图片字段提取、商品资料补抓、标签筛选、字段模板、机会得分与类目筛选 |
+| 展示看板 | 自动关联商品特征与历史销量/销额、属性筛选、覆盖率、份额与趋势、明细追溯、图表和数据导出、发送产品矩阵 |
 
-顶部导航使用 `Ctrl+1~4` 切换模块，支持明暗主题、文件拖入、可搜索的工作表/列名选择、固定底部任务栏和结果入口。自适应图表实验模块已从当前运行版本移除。
+顶部导航使用 `Ctrl+1~5` 切换模块，支持明暗主题、文件拖入、可搜索的工作表/列名选择、固定底部任务栏和结果入口。自适应图表实验模块已从当前运行版本移除。
 
 ## Windows 使用
 
@@ -73,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup_review_env.ps1
 
 ```powershell
 .\.venv-review\Scripts\python.exe tools/run_tests.py --timeout 240
-.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.10.20.spec"
+.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.5.spec"
 .\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm "PM Stack Updater.spec"
 ```
 
@@ -86,7 +89,7 @@ v1.10.20 本阶段发布前完整测试：**230 项通过**；已验证打包 EX
 ```text
 main.py                         应用入口
 core/                           框架、表格写回、任务状态与评论服务
-modules/                        四个内置功能模块
+modules/                        五个内置功能模块
 scripts/                        数据处理、模型提取与报告脚本
 browser-extension/              评论采集扩展
 tests/                          当前版本回归测试

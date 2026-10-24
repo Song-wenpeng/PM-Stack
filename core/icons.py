@@ -136,6 +136,7 @@ MODULE_ICONS = {
     "市场规划": "target",
     "品类信息": "cards",
     "产品矩阵": "grid",
+    "展示看板": "trend",
 }
 
 
