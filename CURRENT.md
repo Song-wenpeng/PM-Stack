@@ -18,10 +18,12 @@
 |---|---|---|---|---|
 | 工作区目录整理与使用入口 | 已完成 | `D:\PM Stack` / 主项目 `main` | 本次目录整理的 Codex 会话 | [整理记录](handoffs/2026-10-workspace-organization.md) |
 | 正式版 v1.11.x 本地修改：展示看板、趋势曲线及配套文件 | 已提交入库，功能验收待确认 | `D:\PM Stack\PM Stack` / `main`（HEAD 含 `9895c6b`） | 2026-10-24 ZCode 会话按用户授权提交；原执行者及验收结论待确认 | [主项目现场](handoffs/2026-10-main-working-tree.md) |
+| 仓库主页完善：推送、根目录整理与 About 侧栏 | 已完成 | `D:\PM Stack\PM Stack` / `main` | 2026-10-24 ZCode 会话 | [整理记录](handoffs/2026-10-24-repo-polish.md) |
 | 研究智能体独立开发分支 | 待确认 | `D:\PM Stack\PM Stack Agent` / `feature/research-agent` | 原执行者及集成计划待确认；本次仅盘点 | [研究分支现场](handoffs/2026-10-research-agent.md) |
 
 ## 已完成的协作基础
 
+- 2026-10-24：仓库主页完善——v1.11.x 两个提交已推送远端（GitHub README 更新为 v1.11.5 五模块）；24 份历史 spec 归档至 `specs/archive/`、7 份说明文档移入 `docs/`，`publish.py` 适配自动归档并更新引用；GitHub About 描述与 7 个 topics 已生效。详见[整理记录](handoffs/2026-10-24-repo-polish.md)。
 - 2026-10-24：按用户授权将 v1.11.x 全部未提交成果提交为 `9895c6b`（28 个文件，+3806 行）；提交后看板/趋势相关回归 43 项通过（日志 `.runtime-local/test-logs/tests-20261024-145650-814187.log`）。协作协议、本索引、交接记录、`.gitignore` 调整及《产品信息提取改进方案》随后提交入库。两次提交均未推送远端；研究工作树未改动。
 - 2026-10-23：外层四组资料移入 `D:\PM Stack\项目资料`，新增 `D:\PM Stack\开始这里.md`；原路径映射和核验见目录整理记录。两个工作树与程序入口保持原路径。
 

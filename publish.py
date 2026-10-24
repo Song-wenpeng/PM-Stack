@@ -13,7 +13,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 MAIN_WINDOW = PROJECT_DIR / "core" / "main_window.py"
-SPEC_TEMPLATE = list(PROJECT_DIR.glob("PM Stack V*.spec"))
+SPEC_ARCHIVE = PROJECT_DIR / "specs" / "archive"
 DIST_EXE = PROJECT_DIR / "dist" / "PM Stack.exe"
 DIST_UPDATER = PROJECT_DIR / "dist" / "PM Stack Updater.exe"
 UPDATER_SPEC = PROJECT_DIR / "PM Stack Updater.spec"
@@ -22,7 +22,7 @@ UPDATE_CHANNEL = PROJECT_DIR / "update-channel.json"
 RELEASE_DIR = PROJECT_DIR / "release"
 RELEASE_CURRENT = RELEASE_DIR / "current"
 RELEASE_ARCHIVE = RELEASE_DIR / "archive"
-RELEASE_GUIDE = PROJECT_DIR / "发布更新指南.md"
+RELEASE_GUIDE = PROJECT_DIR / "docs" / "发布更新指南.md"
 GH_CLI = Path(r"D:\PM Stack\tools-gh\gh.exe")
 
 
@@ -51,6 +51,33 @@ def sha256_file(path):
                 break
             digest.update(chunk)
     return digest.hexdigest().lower()
+
+
+def spec_version_key(path):
+    match = re.search(r"v(\d+(?:\.\d+)+)", path.stem, re.IGNORECASE)
+    return tuple(int(part) for part in match.group(1).split(".")) if match else (0,)
+
+
+def available_spec_templates():
+    """根目录与 specs/archive/ 中可作模板的历史 spec，按版本号降序。"""
+    candidates = [
+        path
+        for path in list(PROJECT_DIR.glob("PM Stack*.spec"))
+        + list(SPEC_ARCHIVE.glob("PM Stack*.spec"))
+        if "updater" not in path.stem.lower() and spec_version_key(path) != (0,)
+    ]
+    return sorted(candidates, key=spec_version_key, reverse=True)
+
+
+def archive_previous_spec(version):
+    """把上一版主程序 spec 移入 specs/archive/，根目录只保留当前版本。"""
+    root_spec = PROJECT_DIR / f"PM Stack {version}.spec"
+    if version.startswith("v") and root_spec.exists():
+        SPEC_ARCHIVE.mkdir(parents=True, exist_ok=True)
+        archived = SPEC_ARCHIVE / root_spec.name
+        shutil.move(str(root_spec), str(archived))
+        return archived
+    return None
 
 
 def run(cmd, **kwargs):
@@ -129,16 +156,18 @@ def main():
     set_version(new_version)
 
     spec_file = None
-    if SPEC_TEMPLATE:
+    templates = available_spec_templates()
+    if templates:
         spec_file = PROJECT_DIR / f"PM Stack {new_version}.spec"
         if not spec_file.exists():
             current_spec = PROJECT_DIR / f"PM Stack {current}.spec"
-            old_spec = (current_spec if current_spec.exists()
-                        else max(SPEC_TEMPLATE,
-                                 key=lambda path: path.stat().st_mtime))
+            old_spec = current_spec if current_spec.exists() else templates[0]
             spec_text = old_spec.read_text(encoding="utf-8")
             spec_file.write_text(spec_text, encoding="utf-8")
             print(f"  基于 {old_spec.name} 创建 {spec_file.name}")
+    archived_spec = archive_previous_spec(current)
+    if archived_spec:
+        print(f"  旧版 spec 已归档: {archived_spec.relative_to(PROJECT_DIR)}")
 
     print("\n[2/6] 打包主程序和更新器 (PyInstaller)...")
     pyinstaller_cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm"]
@@ -179,6 +208,8 @@ def main():
     run(["git", "add", "core/main_window.py", "update.json"])
     if spec_file and spec_file.exists():
         run(["git", "add", str(spec_file)])
+    if archived_spec:
+        run(["git", "add", "-A", "--", "specs/", f"PM Stack {current}.spec"])
     run(["git", "commit", "-m", f"发布 {new_version}"])
     run(["git", "push"])
 
