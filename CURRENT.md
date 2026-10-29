@@ -1,5 +1,7 @@
 # 当前任务索引
 
+2026-10-29 矩阵布局精简与v1.11.7发布进行中，见[本次记录](handoffs/2026-10-29-matrix-layout-release.md)。
+
 2026-10-29 GitHub v1.11.6 已发布为latest：主项目累计源码e08ebeb已推送、CI成功；EXE/ZIP/清单上传及哈希校验通过，公开下载HTTP200；本地运行中的EXE保留，新版ZIP位于dist。按用户授权完成上传，见[发布记录](handoffs/2026-10-29-release-v1.11.6.md)。
 
 2026-10-29 商品明细复制与ASIN跳转已完成：支持单元格/区域/整行复制，点击ASIN按该行站点打开商品页，选择单元格后矩阵发送范围同步。42项定向通过，510项全量中508通过、2项权限跳过；候选EXE源码一致性及三类自检通过，已备份替换dist/PM Stack.exe。未提交、未发布。见[本次记录](handoffs/2026-10-29-dashboard-detail-actions.md)。

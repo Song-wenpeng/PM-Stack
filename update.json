@@ -1,8 +1,8 @@
 {
-  "version": "v1.11.6",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.6/PM-Stack.exe",
-  "sha256": "ca89e5903a1562366e9dccc85fd41ddefc81b6920e8e2aab30402453b30137c4",
-  "size": 134165028,
+  "version": "v1.11.7",
+  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.7/PM-Stack.exe",
+  "sha256": "6ad64b8e90e7dfdbbe6be65e2115353e458d41cb7f33245a9bb720ce18334242",
+  "size": 134162835,
   "mandatory": false,
-  "notes": "新增明细复制和ASIN跳转、总ASIN指标，恢复自由组合矩阵旧布局，整合字段归一化、文件保护、续跑、配置恢复与更新校验等改进。"
+  "notes": "自由组合矩阵字段库移到顶部横向排列，纵向分组在左、横向分组在右；移除产品矩阵介绍区、使用场景矩阵和品牌分类矩阵入口，保留销额透视。"
 }

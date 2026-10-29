@@ -323,11 +323,8 @@ class UIInteractionTests(unittest.TestCase):
                 sales.cross_trend_mode.setCurrentIndex(2)
                 self.assertIn("均价", sales.cross_mode_hint.text())
 
-                self.assertFalse(matrix.m3_sort_order.isEnabled())
-                matrix.m3_sort_col.setText("月销量")
-                self.assertTrue(matrix.m3_sort_order.isEnabled())
-                matrix.m3_sort_col.clear()
-                self.assertFalse(matrix.m3_sort_order.isEnabled())
+                self.assertEqual(matrix.matrix_tabs.count(), 2)
+                self.assertIs(matrix.matrix_tabs.currentWidget(), matrix.free_matrix)
 
                 market.tag_input.setText(first)
                 market._stop_file = str(Path(temp_dir) / "stop.signal")

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""PM Stack v1.11.6 — 自动关联商品特征与历史销量"""
+"""PM Stack v1.11.7 — 自动关联商品特征与历史销量"""
 
 import sys
 import os

@@ -109,25 +109,13 @@ class TaskInteractionTests(unittest.TestCase):
             module._run_tagging()
             run.assert_not_called()
 
-    def test_variant_validation_reveals_advanced_fields_and_keeps_values(self):
-        matrix = self.module('产品矩阵')
-        matrix.m3_file.setText('input.xlsx')
-        matrix.m3_sheet.setText('数据')
-        matrix.m3_brands.setText('品牌A')
-        matrix.m3_parent_asin.setText('父ASIN')
-        with patch.object(matrix, '_run') as run:
-            matrix._run_matrix3()
-        run.assert_not_called()
-        self.assertTrue(matrix.m3_sales_col._advanced_toggle.isChecked())
-        self.assertEqual(matrix.m3_parent_asin.text(), '父ASIN')
-
     def test_sheet_and_column_choices_are_async_and_keep_manual_text(self):
         matrix = self.module('产品矩阵')
         path = self.workbook('source.xlsx', {'元数据': ['ASIN', '品牌', '颜色'], '月数据': ['ASIN', '2026-10']})
         matrix.matrix2_sheet.setText('元数据')
         matrix.matrix2_row_col.setText('手动列名')
         matrix.matrix2_file.setText(str(path))
-        choices = matrix._excel_choices[1]
+        choices = matrix._excel_choices[0]
         self.wait_for(lambda: len(choices.metadata) == 2)
         self.assertGreaterEqual(matrix.matrix2_sheet.findText('月数据'), 0)
         self.assertGreaterEqual(matrix.matrix2_row_col.findText('颜色'), 0)
@@ -147,10 +135,10 @@ class TaskInteractionTests(unittest.TestCase):
         matrix = self.module('产品矩阵')
         path = self.root / 'broken.xlsx'
         path.write_bytes(b'broken zip')
-        matrix.matrix_sheet.setText('自填工作表')
-        matrix.matrix_file.setText(str(path))
-        self.wait_for(lambda: '读取失败' in matrix.matrix_sheet.toolTip())
-        self.assertEqual(matrix.matrix_sheet.text(), '自填工作表')
+        matrix.matrix2_sheet.setText('自填工作表')
+        matrix.matrix2_file.setText(str(path))
+        self.wait_for(lambda: '读取失败' in matrix.matrix2_sheet.toolTip())
+        self.assertEqual(matrix.matrix2_sheet.text(), '自填工作表')
 
     def test_results_ignore_stale_files_and_failed_runs(self):
         output = self.root / 'result.xlsx'

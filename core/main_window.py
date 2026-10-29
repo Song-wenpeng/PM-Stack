@@ -35,7 +35,7 @@ from .app_updater import ApplicationUpdater, launch_updater_helper
 from .widgets import make_button, make_hint_label
 
 
-CURRENT_VERSION = "v1.11.6"
+CURRENT_VERSION = "v1.11.7"
 APP_NAME = "PM Stack"
 APP_TITLE = f"{APP_NAME} {CURRENT_VERSION}"
 
@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         # 顶部标题栏
         header = QWidget()
         header.setObjectName("Header")
+        self.page_header = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(28, 16, 28, 14)
         header_layout.setSpacing(16)
@@ -355,6 +356,7 @@ class MainWindow(QMainWindow):
         info = self._modules[index][0]
         self.page_title.setText(info.get("name", APP_NAME))
         self.page_subtitle.setText(info.get("description", ""))
+        self.page_header.setVisible(info.get("name") != "产品矩阵")
         self._refresh_nav_icons()
 
     # ================================================================
