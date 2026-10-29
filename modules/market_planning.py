@@ -338,6 +338,11 @@ class ModuleWidget(QWidget):
         self.vision_cb.setChecked(True)
         form1.addRow(self.vision_cb)
 
+        self.normalize_cb = QCheckBox('提取后自动归一化（统一格式与单位）')
+        self.normalize_cb.setChecked(True)
+        self.normalize_cb.setToolTip('按特征统计不同结果与频次，由文本模型批量建立映射，再修正对应行；无法确定的值保留原样。')
+        form1.addRow(self.normalize_cb)
+
         self.fetch_cb = QCheckBox("自动补抓缺失的五点描述与主副图（边抓边提取）")
         self.fetch_cb.setChecked(True)
         self.fetch_cb.setToolTip(
@@ -374,10 +379,10 @@ class ModuleWidget(QWidget):
         btn_row1.addWidget(self.run_btn1)
         btn_row1.addWidget(self.stop_btn1)
         register_form(form1)
-        advanced_rows(form1, 8, 10, '图片识别、自动补抓与并发')
+        advanced_rows(form1, 8, 11, '图片识别、归一化、自动补抓与并发')
         self.extract_options_hint = make_hint_label('')
         form1.addRow(self.extract_options_hint)
-        for option in (self.vision_cb, self.fetch_cb, self.fast_cb):
+        for option in (self.vision_cb, self.normalize_cb, self.fetch_cb, self.fast_cb):
             option.toggled.connect(self._update_extract_options)
         self.concurrency_spin.valueChanged.connect(self._update_extract_options)
         self._update_extract_options()
@@ -408,6 +413,18 @@ class ModuleWidget(QWidget):
         self.score_output = FileDropLineEdit(placeholder="留空则使用默认输出路径")
         form2.addRow("输出文件:", file_row(self.score_output, "save", parent=self))
 
+        self.score_date = QLineEdit()
+        self.score_date.setPlaceholderText("留空：使用运行当日")
+        self.score_date.setToolTip("上架天数与新品判定都相对这个日期计算，格式 YYYY-MM-DD；"
+                                   "留空表示按运行当日计算。")
+        form2.addRow("分析基准日:", self.score_date)
+        self.score_hint = make_hint_label('')
+        self.score_hint.setTextFormat(Qt.TextFormat.PlainText)
+        form2.addRow(self.score_hint)
+        self.score_date.textChanged.connect(self._update_score_hint)
+        self.score_output.textChanged.connect(self._update_score_hint)
+        self._update_score_hint()
+
         self.run_btn2 = make_button("计算得分", "primary")
         self.run_btn2.clicked.connect(self._run_scoring)
         register_form(form2)
@@ -432,18 +449,26 @@ class ModuleWidget(QWidget):
         self.cat_input = FileDropLineEdit(placeholder="选择或拖入类目数据 Excel 文件")
         form3.addRow("类目数据:", file_row(self.cat_input, "open", parent=self))
 
-        self.cat_output = FileDropLineEdit(placeholder="留空则使用默认输出路径")
+        self.cat_output = FileDropLineEdit(placeholder="留空：在输入旁另存“原名_类目筛选结果.xlsx”")
         form3.addRow("输出文件:", file_row(self.cat_output, "save", parent=self))
+        self.cat_output_hint = make_hint_label('输入始终只读；断点独立保存在任务状态目录。')
+        self.cat_output_hint.setTextFormat(Qt.TextFormat.PlainText)
+        form3.addRow(self.cat_output_hint)
+        self.cat_input.textChanged.connect(self._update_category_output_hint)
+        self.cat_output.textChanged.connect(self._update_category_output_hint)
 
         self.run_btn3 = make_button("执行 AI 筛选", "primary")
         self.run_btn3.clicked.connect(self._run_category)
+        self.stop_btn3 = make_button('停止')
+        self.stop_btn3.setEnabled(False)
+        self.stop_btn3.clicked.connect(self._stop_category)
         register_form(form3)
         card3.content_layout.addLayout(form3)
         t3.addWidget(card3)
         self.log3 = LogConsole()
         collapsible_log(t3, self.log3)
         t3.addStretch()
-        tabs.addTab(pin_actions(tab3, self.run_btn3), "类目筛选")
+        tabs.addTab(pin_actions(tab3, self.run_btn3, self.stop_btn3), "类目筛选")
 
         # ================= Tab 4: 数据进度 =================
         tab4 = QWidget()
@@ -483,7 +508,7 @@ class ModuleWidget(QWidget):
         self._result_sources = {
             self.run_btn1: lambda: ([self.tag_output.text() or self.tag_input.text()], os.path.dirname(self.tag_input.text())),
             self.run_btn2: lambda: ([self.score_output.text()], self.score_dir.text()),
-            self.run_btn3: lambda: ([self.cat_output.text()], os.path.dirname(self.cat_input.text())),
+            self.run_btn3: lambda: ([self._category_output_path()], os.path.dirname(self.cat_input.text())),
             self.run_btn4: lambda: ([], self.progress_dir.text()),
         }
         layout.addWidget(tabs)
@@ -492,6 +517,7 @@ class ModuleWidget(QWidget):
         self.extract_options_hint.setText(
             f'图片识别：{"开启" if self.vision_cb.isChecked() else "关闭"} · '
             f'自动补抓：{"开启" if self.fetch_cb.isChecked() else "关闭"} · '
+            f'归一化：{"开启" if self.normalize_cb.isChecked() else "关闭"} · '
             f'并发：{self.concurrency_spin.value() if self.fast_cb.isChecked() or self.fetch_cb.isChecked() else 1}')
 
     def _filter_fields(self, *_):
@@ -673,6 +699,8 @@ class ModuleWidget(QWidget):
             env['PRODUCT_CONFIG_SNAPSHOT'] = json.dumps(json.load(file), ensure_ascii=False)
         env["FIELDS"] = ",".join(selected)
         env["ENABLE_VISION"] = "1" if self.vision_cb.isChecked() else "0"
+        env['EXTRACT_NORMALIZE'] = '1' if self.normalize_cb.isChecked() else '0'
+        env['NORMALIZE_CONCURRENCY'] = str(min(4, self.concurrency_spin.value()) if self.fast_cb.isChecked() else 1)
         env["ENABLE_FETCH"] = "1" if self.fetch_cb.isChecked() else "0"
         env["STOP_FILE"] = self._stop_file
         # 清除旧的停止信号
@@ -707,30 +735,109 @@ class ModuleWidget(QWidget):
         except Exception as e:
             self.log1.append(f"\n[错误] 无法创建停止信号: {e}")
 
+    def _update_score_hint(self, *_):
+        from core.report_io import resolve_reference_date
+        raw = self.score_date.text().strip()
+        output = self.score_output.text().strip() or '脚本默认输出路径'
+        try:
+            stamp, source = resolve_reference_date(raw, label='分析基准日',
+                                                   env_name='MARKET_ANALYSIS_DATE')
+        except ValueError:
+            self.score_hint.setText(f'分析基准日无法解析：{raw}。请使用 YYYY-MM-DD（如 2026-07-31），'
+                                    f'或留空使用运行当日。')
+            return
+        self.score_hint.setText(f'分析基准日 {stamp:%Y-%m-%d}（{source}）；输出：{output}。'
+                                f'得分是本次参与类目之间的相对分位，参与文件变化会影响分数。')
+
     @validated(lambda s: [(s.score_dir, '数据目录')], "run_btn2")
     def _run_scoring(self):
+        from core.report_io import resolve_reference_date
         data_dir = self.score_dir.text().strip()
         output = self.score_output.text().strip()
         if not data_dir:
             self.log2.setPlainText("请先选择数据目录。")
             return
-        env = {"MARKET_DATA_DIR": data_dir}
+        # 基准日格式在启动前就拦下来，避免跑完整个目录才在日志里报错。
+        try:
+            resolve_reference_date(self.score_date.text(), label='分析基准日',
+                                   env_name='MARKET_ANALYSIS_DATE')
+        except ValueError as exc:
+            self.log2.setPlainText(str(exc))
+            self.run_btn2._task_bar.summary.setText(str(exc))
+            return False
+        env = {"MARKET_DATA_DIR": data_dir,
+               "MARKET_ANALYSIS_DATE": self.score_date.text().strip()}
         if output:
             env["MARKET_OUTPUT_FILE"] = output
         self._run("欧洲市场规划/机会得分.py", self.log2, env, run_btn=self.run_btn2)
 
+    def _category_output_path(self):
+        from core.report_io import category_output_path
+        inp = self.cat_input.text().strip()
+        return str(category_output_path(inp, self.cat_output.text().strip())) if inp else ''
+
+    def _update_category_output_hint(self, *_):
+        output = self._category_output_path()
+        self.cat_output_hint.setText('输入始终只读；断点独立保存。' + (f'实际输出：{output}' if output else '请选择输入文件。'))
+
     @validated(lambda s: [(s.cat_input, '类目数据文件')], "run_btn3")
     def _run_category(self):
+        from core.report_io import category_checkpoint_path, category_state_dir, require_distinct
+        from pathlib import Path
+        import uuid
         inp = self.cat_input.text().strip()
-        if not inp:
-            self.log3.setPlainText("请先选择类目数据文件。")
-            return
-        env = {"CATEGORY_INPUT_FILE": inp}
-        out = self.cat_output.text().strip()
-        if out:
-            env["CATEGORY_OUTPUT_FILE"] = out
-            env["CATEGORY_CHECKPOINT_FILE"] = out
-        self._run("欧洲市场规划/类目初筛.py", self.log3, env, run_btn=self.run_btn3)
+        out = self._category_output_path()
+        checkpoint = category_checkpoint_path(inp, os.getenv('CATEGORY_CHECKPOINT_FILE', ''))
+        try:
+            require_distinct(inp, out, checkpoint)
+            if Path(out).suffix.lower() != '.xlsx' or checkpoint.suffix.lower() != '.json':
+                raise ValueError('结果必须为.xlsx，独立断点必须为.json。')
+        except ValueError as exc:
+            self.log3.setPlainText(str(exc))
+            self.run_btn3._task_bar.summary.setText(str(exc))
+            return False
+        if self.runner.is_running() or self.runner.is_any_running():
+            self.log3.append('[提示] 当前有任务正在运行，请等待完成。')
+            return False
+        self._category_stop_file = category_state_dir() / ('stop-' + uuid.uuid4().hex + '.json')
+        self._category_paths = (inp, out, checkpoint)
+        self._category_stop_requested = False
+        env = {'CATEGORY_INPUT_FILE': inp, 'CATEGORY_OUTPUT_FILE': out,
+               'CATEGORY_CHECKPOINT_FILE': str(checkpoint),
+               'CATEGORY_STOP_FILE': str(self._category_stop_file)}
+        self.stop_btn3.setEnabled(True)
+        started = self._run('欧洲市场规划/类目初筛.py', self.log3, env, run_btn=self.run_btn3,
+                            finished_callback=self._on_category_done)
+        if not started:
+            self.stop_btn3.setEnabled(False)
+        return started
+
+    def _stop_category(self):
+        from core.report_io import write_json, SafeWriteError
+        try:
+            write_json(self._category_stop_file, {'stop': True}, protected_paths=self._category_paths)
+            self._category_stop_requested = True
+            self.stop_btn3.setEnabled(False)
+            self.log3.append('已请求停止；等待当前请求返回并安全保存断点/结果，请勿关窗。')
+        except (ValueError, SafeWriteError) as exc:
+            self.log3.append(str(exc))
+
+    def _on_category_done(self, code):
+        from pathlib import Path
+        self.stop_btn3.setEnabled(False)
+        # 本模块自己创建的停止信号文件用完即删，避免在状态目录里长期累积。
+        stop_file = getattr(self, '_category_stop_file', None)
+        if stop_file is not None:
+            try:
+                Path(stop_file).unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._category_stop_file = None
+        if code == 130:
+            self.run_btn3._task_bar.finish(code, stopped=True)
+            self.log3.append('类目任务已停止，已处理行的结果及断点位置见摘要。')
+        elif code == 2:
+            self.run_btn3._task_bar.summary.setText('存在失败或待审项；已保存部分结果，可重新运行补评。')
 
     @validated(lambda s: [(s.progress_ids, '全部 ID 文件'), (s.progress_dir, '已爬取目录')], "run_btn4")
     def _run_progress(self):

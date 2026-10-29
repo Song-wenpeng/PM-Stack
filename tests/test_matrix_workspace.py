@@ -55,22 +55,23 @@ class MatrixWorkspaceTests(unittest.TestCase):
         self.assertEqual(w.table.viewport().property('matrixDropRole'), 'cards')
         self.assertEqual(next(iter(w.cells.values())).viewport().property('matrixDropRole'), 'cards')
 
-    def test_configuration_can_collapse_without_changing_matrix(self):
+    def test_legacy_split_layout_resizes_without_changing_matrix(self):
         w = self.widget
-        w.resize(1300, 800)
+        w.resize(1300, 900)
         w.show()
         self.app.processEvents()
+        self.assertEqual(w.workspace_split.count(), 2)
+        self.assertEqual(w.canvas_split.orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(w.matrix_split.orientation(), Qt.Orientation.Horizontal)
         self.assertLessEqual(w.workspace_split.sizes()[0], 210)
         original_cells = dict(w.cells)
-        preview_width = w.table.width()
-        w.config_toggle.click()
+        w.canvas_split.setSizes([220, 600])
+        w.matrix_split.setSizes([200, 800])
         self.app.processEvents()
-        self.assertFalse(w.config_scroll.isVisible())
-        self.assertGreater(w.table.width(), preview_width)
         self.assertEqual(w.cells, original_cells)
-        w.config_toggle.click()
-        self.app.processEvents()
-        self.assertTrue(w.config_scroll.isVisible())
+        self.assertEqual(w.cells[(0, 0)].count(), 2)
+        self.assertGreater(w.table.width(), 0)
+        self.assertGreater(w.table.height(), 0)
         self.assertEqual(w.card_summary.text(), '卡片字段')
         self.assertNotIn('勾选', w.vertical.value_title.text())
 

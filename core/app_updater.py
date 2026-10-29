@@ -307,6 +307,14 @@ class ApplicationUpdater(QObject):
     def get_manifest(self):
         return self._manifest
 
+    @staticmethod
+    def _emit(signal, *args):
+        """后台线程结束时窗口可能已销毁；不能让发射信号抛到线程外。"""
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass
+
     def check_update(self, source, current_version):
         with self._state_lock:
             if self._checking:
@@ -326,13 +334,14 @@ class ApplicationUpdater(QObject):
                 message = f"发现主程序 {manifest.version}（当前 {current_version}）"
                 if manifest.notes:
                     message += f"\n\n{manifest.notes}"
-                self.check_finished.emit(True, message)
+                self._emit(self.check_finished, True, message)
             else:
-                self.check_finished.emit(
+                self._emit(
+                    self.check_finished,
                     False, f"主程序已是最新版本 ({current_version})")
         except (OSError, ValueError, urllib.error.URLError) as exc:
             self._manifest = None
-            self.check_finished.emit(False, f"主程序更新检查失败: {exc}")
+            self._emit(self.check_finished, False, f"主程序更新检查失败: {exc}")
         finally:
             with self._state_lock:
                 self._checking = False
@@ -340,7 +349,7 @@ class ApplicationUpdater(QObject):
     def download_update(self):
         manifest = self._manifest
         if manifest is None:
-            self.download_finished.emit(False, "没有可下载的主程序更新", "")
+            self._emit(self.download_finished, False, "没有可下载的主程序更新", "")
             return False
         with self._state_lock:
             if self._downloading:
@@ -362,16 +371,16 @@ class ApplicationUpdater(QObject):
                 size_text = f"{downloaded / 1024 / 1024:.1f} MB"
                 if total:
                     size_text += f" / {total / 1024 / 1024:.1f} MB"
-                self.progress.emit(percent, f"正在下载主程序：{size_text}")
+                self._emit(self.progress, percent, f"正在下载主程序：{size_text}")
 
             path = download_verified_file(
                 manifest.url, destination, manifest.sha256,
                 manifest.size, report,
             )
-            self.progress.emit(100, "下载完成，SHA-256 校验通过")
-            self.download_finished.emit(True, "主程序更新已下载并验证", path)
+            self._emit(self.progress, 100, "下载完成，SHA-256 校验通过")
+            self._emit(self.download_finished, True, "主程序更新已下载并验证", path)
         except (OSError, ValueError, urllib.error.URLError) as exc:
-            self.download_finished.emit(False, f"主程序下载失败: {exc}", "")
+            self._emit(self.download_finished, False, f"主程序下载失败: {exc}", "")
         finally:
             with self._state_lock:
                 self._downloading = False

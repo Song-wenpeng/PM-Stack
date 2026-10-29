@@ -1,18 +1,38 @@
 # -*- coding: utf-8 -*-
+"""市场机会得分：对候选类目做跨类目相对分位打分。
+
+分析基准日不再写死：默认取运行当日，可用 MARKET_ANALYSIS_DATE 或界面显式指定。
+基准日、权重、参与文件与样本量都会写入输出的「参数快照」表，便于事后追溯；
+各维度分数是本次参与类目之间的相对分位，不是绝对阈值。
+"""
+import datetime as dt
+import glob
 import os
 import re
-import glob
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+# Direct CLI and the embedded runner both use the same safe I/O implementation.
+if str(Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.report_io import (normalized_path, resolve_reference_date, same_file,
+                            write_excel, SafeWriteError)
 
 # =========================
 # 配置区
 # =========================
-DATA_DIR = os.getenv("MARKET_DATA_DIR", r"D:\Google浏览器下载\欧洲市场规划\德国市场")
-OUTPUT_FILE = os.getenv("MARKET_OUTPUT_FILE", r"D:\Google浏览器下载\欧洲市场规划\德国市场_类目评估汇总.xlsx")
-
-# 建议固定为你抓数时点所在月份末
-ANALYSIS_DATE = pd.Timestamp("2026-4-15")
+DEFAULT_DATA_DIR = r"D:\Google浏览器下载\欧洲市场规划\德国市场"
+DEFAULT_OUTPUT_FILE = r"D:\Google浏览器下载\欧洲市场规划\德国市场_类目评估汇总.xlsx"
 
 # 新品定义：最近365天上架
 NEW_PRODUCT_DAYS = 365
@@ -90,10 +110,14 @@ def extract_category_id(filename):
 
 
 def load_excel_file(file_path):
-    """优先读取 DE sheet，没有就读第一个"""
-    xls = pd.ExcelFile(file_path)
-    sheet_name = "DE" if "DE" in xls.sheet_names else xls.sheet_names[0]
-    df = pd.read_excel(file_path, sheet_name=sheet_name)
+    """优先读取 DE sheet，没有就读第一个。
+
+    用上下文管理器确保关闭句柄：Windows 上未关闭的 ExcelFile 会一直占用源文件，
+    导致用户无法移动、删除或覆盖自己刚抓的数据。
+    """
+    with pd.ExcelFile(file_path) as xls:
+        sheet_name = "DE" if "DE" in xls.sheet_names else xls.sheet_names[0]
+        df = pd.read_excel(xls, sheet_name=sheet_name)
     df.columns = df.columns.astype(str).str.strip()
     return df, sheet_name
 
@@ -178,6 +202,44 @@ def months_since_launch(launch_date, analysis_date):
     return max(days / 30.0, 1)
 
 
+def resolve_analysis_date(raw='', today=None):
+    """返回 (分析基准日 Timestamp, 来源说明)。
+
+    默认取运行当日，因为「上架天数」「是否新品」必须相对一个明确的时点计算；
+    写死一个过期日期会让该日之后上架的商品得到负天数并被漏判为非新品。
+    格式解析与界面共用 core.report_io.resolve_reference_date，避免两处口径不一致。
+    """
+    stamp, source = resolve_reference_date(raw, today=today, label='分析基准日',
+                                           env_name='MARKET_ANALYSIS_DATE')
+    return pd.Timestamp(stamp), source
+
+
+def collect_files(data_dir, output):
+    """只有确认是旧评分报告才排除同源输出，不能把真实输入排除后覆盖。"""
+    candidates = [f for f in glob.glob(os.path.join(str(data_dir), '*.xlsx'))
+                  if not os.path.basename(f).startswith('~$')]
+    kept, excluded = [], []
+    for path in candidates:
+        if not same_file(path, output):
+            kept.append(path)
+            continue
+        try:
+            with pd.ExcelFile(path) as book:
+                names = set(book.sheet_names)
+                report_sheets = {'类目汇总评分', '原始Top100汇总', '评分说明'}
+                is_report = (report_sheets <= names <= report_sheets | {'参数快照'}
+                             and {'类目ID', '市场机会总分', '类目标签'} <= set(
+                                 pd.read_excel(book, sheet_name='类目汇总评分', nrows=0).columns)
+                             and {'来源文件', '类目ID'} <= set(
+                                 pd.read_excel(book, sheet_name='原始Top100汇总', nrows=0).columns))
+        except Exception:
+            is_report = False
+        if not is_report:
+            raise ValueError(f'禁止覆盖输入原件：输出与候选类目文件相同：{path}。请选择其他输出文件。')
+        excluded.append(path)
+    return sorted(kept), excluded
+
+
 def build_relative_price_bands(df, price_col="价格_num"):
     """
     基于类目中位价建立相对价格带
@@ -219,7 +281,7 @@ def build_relative_price_bands(df, price_col="价格_num"):
 # =========================
 # 单个类目文件汇总
 # =========================
-def summarize_category_file(file_path):
+def summarize_category_file(file_path, analysis_date):
     df, sheet_name = load_excel_file(file_path)
     category_id = extract_category_id(file_path)
 
@@ -305,8 +367,20 @@ def summarize_category_file(file_path):
     # =========================
     # 4. 新品成长机会
     # =========================
-    df["上架天数"] = (ANALYSIS_DATE - df["上架时间_dt"]).dt.days
-    df["是否新品"] = df["上架天数"].between(0, NEW_PRODUCT_DAYS, inclusive="both")
+    df["上架天数"] = (analysis_date - df["上架时间_dt"]).dt.days
+    df["是否新品"] = [bool(x) for x in df["上架天数"].between(0, NEW_PRODUCT_DAYS, inclusive="both")]
+
+    # 上架时间晚于基准日说明源数据或基准日有问题；负天数不是「很旧」，必须显式暴露。
+    future_launch = int((df["上架天数"] < 0).sum())
+    if future_launch:
+        latest = df.loc[df["上架天数"] < 0, "上架时间_dt"].max()
+        print(f"  [警告] {os.path.basename(file_path)} 有 {future_launch} 行上架时间晚于分析基准日"
+              f"（最晚 {latest:%Y-%m-%d}），这些行的上架天数为负、不计入新品；"
+              f"请确认基准日是否早于抓数时点。")
+    missing_launch = int(df["上架时间_dt"].isna().sum())
+    if missing_launch:
+        print(f"  [提示] {os.path.basename(file_path)} 有 {missing_launch} 行缺少可解析的上架时间，"
+              f"不计入新品。")
 
     new_df = df[df["是否新品"]].copy()
 
@@ -317,7 +391,7 @@ def summarize_category_file(file_path):
     top20_new_count = df.head(20)["是否新品"].sum()
 
     if len(new_df) > 0:
-        new_df["上架月数"] = new_df["上架时间_dt"].apply(lambda x: months_since_launch(x, ANALYSIS_DATE))
+        new_df["上架月数"] = new_df["上架时间_dt"].apply(lambda x: months_since_launch(x, analysis_date))
         new_df["单月爬坡效率"] = new_df["月销量_num"] / new_df["上架月数"]
         new_ramp_efficiency = new_df["单月爬坡效率"].mean(skipna=True)
     else:
@@ -343,6 +417,9 @@ def summarize_category_file(file_path):
         "文件名": os.path.basename(file_path),
         "Sheet": sheet_name,
         "样本数": len(df),
+        "分析基准日": f"{analysis_date:%Y-%m-%d}",
+        "上架晚于基准日数": future_launch,
+        "上架时间缺失数": missing_launch,
 
         # 市场体量
         "Top100月总销量": total_units,
@@ -387,109 +464,88 @@ def summarize_category_file(file_path):
 
 
 # =========================
-# 主程序：汇总所有类目文件
-# =========================
-all_files = glob.glob(os.path.join(DATA_DIR, "*.xlsx"))
-all_files = [f for f in all_files if not os.path.basename(f).startswith("~$")]
-
-if len(all_files) == 0:
-    raise ValueError(f"文件夹中未找到 xlsx 文件：{DATA_DIR}")
-
-summaries = []
-raw_rows = []
-
-for file_path in all_files:
-    try:
-        summary, raw_df = summarize_category_file(file_path)
-        if summary is not None:
-            summaries.append(summary)
-
-            temp = raw_df.copy()
-            temp["来源文件"] = os.path.basename(file_path)
-            temp["类目ID"] = summary["类目ID"]
-            temp["类目名称"] = summary["类目名称"]
-            raw_rows.append(temp)
-    except Exception as e:
-        print(f"处理失败：{os.path.basename(file_path)} -> {e}")
-
-summary_df = pd.DataFrame(summaries)
-
-if len(summary_df) == 0:
-    raise ValueError("没有成功汇总出任何类目数据，请检查文件格式。")
-
-# =========================
 # 打分
 # =========================
+def apply_scores(summary_df):
+    """按固定权重折算到100分制；公式与权重与历史版本一致。"""
+    # 1. 市场体量
+    summary_df["score_总销额"] = quantile_score(summary_df["Top100月总销额"])
+    summary_df["score_总销量"] = quantile_score(summary_df["Top100月总销量"])
+    summary_df["score_中位销额"] = quantile_score(summary_df["中位SKU月销额"])
 
-# 1. 市场体量
-summary_df["score_总销额"] = quantile_score(summary_df["Top100月总销额"])
-summary_df["score_总销量"] = quantile_score(summary_df["Top100月总销量"])
-summary_df["score_中位销额"] = quantile_score(summary_df["中位SKU月销额"])
+    summary_df["市场体量分"] = (
+        summary_df["score_总销额"] * SUB_WEIGHTS["市场体量"]["Top100月总销额"] +
+        summary_df["score_总销量"] * SUB_WEIGHTS["市场体量"]["Top100月总销量"] +
+        summary_df["score_中位销额"] * SUB_WEIGHTS["市场体量"]["中位SKU月销额"]
+    ) / (5 * sum(SUB_WEIGHTS["市场体量"].values())) * WEIGHTS["市场体量"]
 
-summary_df["市场体量分"] = (
-    summary_df["score_总销额"] * SUB_WEIGHTS["市场体量"]["Top100月总销额"] +
-    summary_df["score_总销量"] * SUB_WEIGHTS["市场体量"]["Top100月总销量"] +
-    summary_df["score_中位销额"] * SUB_WEIGHTS["市场体量"]["中位SKU月销额"]
-) / (5 * sum(SUB_WEIGHTS["市场体量"].values())) * WEIGHTS["市场体量"]
+    # 2. 竞争结构
+    summary_df["score_CR10"] = quantile_score(summary_df["CR10销额占比"], reverse=True)
+    summary_df["score_CR20"] = quantile_score(summary_df["CR20销额占比"], reverse=True)
+    summary_df["score_长尾"] = quantile_score(summary_df["长尾销额占比"])
 
-# 2. 竞争结构
-summary_df["score_CR10"] = quantile_score(summary_df["CR10销额占比"], reverse=True)
-summary_df["score_CR20"] = quantile_score(summary_df["CR20销额占比"], reverse=True)
-summary_df["score_长尾"] = quantile_score(summary_df["长尾销额占比"])
+    summary_df["竞争结构分"] = (
+        summary_df["score_CR10"] * SUB_WEIGHTS["竞争结构"]["CR10销额占比"] +
+        summary_df["score_CR20"] * SUB_WEIGHTS["竞争结构"]["CR20销额占比"] +
+        summary_df["score_长尾"] * SUB_WEIGHTS["竞争结构"]["长尾销额占比"]
+    ) / (5 * sum(SUB_WEIGHTS["竞争结构"].values())) * WEIGHTS["竞争结构"]
 
-summary_df["竞争结构分"] = (
-    summary_df["score_CR10"] * SUB_WEIGHTS["竞争结构"]["CR10销额占比"] +
-    summary_df["score_CR20"] * SUB_WEIGHTS["竞争结构"]["CR20销额占比"] +
-    summary_df["score_长尾"] * SUB_WEIGHTS["竞争结构"]["长尾销额占比"]
-) / (5 * sum(SUB_WEIGHTS["竞争结构"].values())) * WEIGHTS["竞争结构"]
+    # 3. 价格环境
+    summary_df["score_中位价格"] = summary_df["中位价格"].apply(score_median_price)
+    summary_df["score_价格CV"] = summary_df["价格变异系数"].apply(score_price_cv)
+    summary_df["score_核心价格带集中"] = quantile_score(summary_df["核心价格带SKU占比"], reverse=True)
 
-# 3. 价格环境
-summary_df["score_中位价格"] = summary_df["中位价格"].apply(score_median_price)
-summary_df["score_价格CV"] = summary_df["价格变异系数"].apply(score_price_cv)
-summary_df["score_核心价格带集中"] = quantile_score(summary_df["核心价格带SKU占比"], reverse=True)
+    summary_df["价格环境分"] = (
+        summary_df["score_中位价格"] * SUB_WEIGHTS["价格环境"]["中位价格"] +
+        summary_df["score_价格CV"] * SUB_WEIGHTS["价格环境"]["价格变异系数"] +
+        summary_df["score_核心价格带集中"] * SUB_WEIGHTS["价格环境"]["核心价格带SKU占比"]
+    ) / (5 * sum(SUB_WEIGHTS["价格环境"].values())) * WEIGHTS["价格环境"]
 
-summary_df["价格环境分"] = (
-    summary_df["score_中位价格"] * SUB_WEIGHTS["价格环境"]["中位价格"] +
-    summary_df["score_价格CV"] * SUB_WEIGHTS["价格环境"]["价格变异系数"] +
-    summary_df["score_核心价格带集中"] * SUB_WEIGHTS["价格环境"]["核心价格带SKU占比"]
-) / (5 * sum(SUB_WEIGHTS["价格环境"].values())) * WEIGHTS["价格环境"]
+    # 4. 新品成长机会
+    summary_df["score_新品数占比"] = quantile_score(summary_df["新品数占比"])
+    summary_df["score_新品销量占比"] = quantile_score(summary_df["新品销量占比"])
+    summary_df["score_新品销额占比"] = quantile_score(summary_df["新品销额占比"])
+    summary_df["score_Top20新品数"] = quantile_score(summary_df["Top20新品数"])
+    summary_df["score_新品爬坡效率"] = quantile_score(summary_df["新品爬坡效率"])
 
-# 4. 新品成长机会
-summary_df["score_新品数占比"] = quantile_score(summary_df["新品数占比"])
-summary_df["score_新品销量占比"] = quantile_score(summary_df["新品销量占比"])
-summary_df["score_新品销额占比"] = quantile_score(summary_df["新品销额占比"])
-summary_df["score_Top20新品数"] = quantile_score(summary_df["Top20新品数"])
-summary_df["score_新品爬坡效率"] = quantile_score(summary_df["新品爬坡效率"])
+    summary_df["新品成长机会分"] = (
+        summary_df["score_新品数占比"] * SUB_WEIGHTS["新品成长机会"]["新品数占比"] +
+        summary_df["score_新品销量占比"] * SUB_WEIGHTS["新品成长机会"]["新品销量占比"] +
+        summary_df["score_新品销额占比"] * SUB_WEIGHTS["新品成长机会"]["新品销额占比"] +
+        summary_df["score_Top20新品数"] * SUB_WEIGHTS["新品成长机会"]["Top20新品数"] +
+        summary_df["score_新品爬坡效率"] * SUB_WEIGHTS["新品成长机会"]["新品爬坡效率"]
+    ) / (5 * sum(SUB_WEIGHTS["新品成长机会"].values())) * WEIGHTS["新品成长机会"]
 
-summary_df["新品成长机会分"] = (
-    summary_df["score_新品数占比"] * SUB_WEIGHTS["新品成长机会"]["新品数占比"] +
-    summary_df["score_新品销量占比"] * SUB_WEIGHTS["新品成长机会"]["新品销量占比"] +
-    summary_df["score_新品销额占比"] * SUB_WEIGHTS["新品成长机会"]["新品销额占比"] +
-    summary_df["score_Top20新品数"] * SUB_WEIGHTS["新品成长机会"]["Top20新品数"] +
-    summary_df["score_新品爬坡效率"] * SUB_WEIGHTS["新品成长机会"]["新品爬坡效率"]
-) / (5 * sum(SUB_WEIGHTS["新品成长机会"].values())) * WEIGHTS["新品成长机会"]
+    # 5. 门槛与热度
+    summary_df["score_前20评论数"] = quantile_score(summary_df["前20平均评分数"], reverse=True)
+    summary_df["score_月新增评论总数"] = quantile_score(summary_df["Top100月新增评分总数"])
+    summary_df["score_新品新增评论占比"] = quantile_score(summary_df["新品月新增评分占比"])
 
-# 5. 门槛与热度
-summary_df["score_前20评论数"] = quantile_score(summary_df["前20平均评分数"], reverse=True)
-summary_df["score_月新增评论总数"] = quantile_score(summary_df["Top100月新增评分总数"])
-summary_df["score_新品新增评论占比"] = quantile_score(summary_df["新品月新增评分占比"])
+    summary_df["门槛与热度分"] = (
+        summary_df["score_前20评论数"] * SUB_WEIGHTS["门槛与热度"]["前20平均评分数"] +
+        summary_df["score_月新增评论总数"] * SUB_WEIGHTS["门槛与热度"]["Top100月新增评分总数"] +
+        summary_df["score_新品新增评论占比"] * SUB_WEIGHTS["门槛与热度"]["新品月新增评分占比"]
+    ) / (5 * sum(SUB_WEIGHTS["门槛与热度"].values())) * WEIGHTS["门槛与热度"]
 
-summary_df["门槛与热度分"] = (
-    summary_df["score_前20评论数"] * SUB_WEIGHTS["门槛与热度"]["前20平均评分数"] +
-    summary_df["score_月新增评论总数"] * SUB_WEIGHTS["门槛与热度"]["Top100月新增评分总数"] +
-    summary_df["score_新品新增评论占比"] * SUB_WEIGHTS["门槛与热度"]["新品月新增评分占比"]
-) / (5 * sum(SUB_WEIGHTS["门槛与热度"].values())) * WEIGHTS["门槛与热度"]
+    # 总分
+    summary_df["市场机会总分"] = (
+        summary_df["市场体量分"] +
+        summary_df["竞争结构分"] +
+        summary_df["价格环境分"] +
+        summary_df["新品成长机会分"] +
+        summary_df["门槛与热度分"]
+    )
 
-# 总分
-summary_df["市场机会总分"] = (
-    summary_df["市场体量分"] +
-    summary_df["竞争结构分"] +
-    summary_df["价格环境分"] +
-    summary_df["新品成长机会分"] +
-    summary_df["门槛与热度分"]
-)
+    summary_df["类目标签"] = summary_df["市场机会总分"].apply(classify_tag)
+    summary_df["建议动作"] = summary_df.apply(make_recommendation, axis=1)
 
-# 标签
+    # 排序
+    return summary_df.sort_values(by="市场机会总分", ascending=False).reset_index(drop=True)
+
+
+# =========================
+# 标签与建议
+# =========================
 def classify_tag(x):
     if pd.isna(x):
         return "D"
@@ -502,7 +558,6 @@ def classify_tag(x):
     else:
         return "D"
 
-summary_df["类目标签"] = summary_df["市场机会总分"].apply(classify_tag)
 
 def make_recommendation(row):
     score = row["市场机会总分"]
@@ -517,32 +572,115 @@ def make_recommendation(row):
     else:
         return "暂不优先"
 
-summary_df["建议动作"] = summary_df.apply(make_recommendation, axis=1)
 
-# 排序
-summary_df = summary_df.sort_values(by="市场机会总分", ascending=False).reset_index(drop=True)
-
-# =========================
-# 输出
-# =========================
-output_dir = os.path.dirname(OUTPUT_FILE)
-if output_dir:
-    os.makedirs(output_dir, exist_ok=True)
-
-with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
-    summary_df.to_excel(writer, sheet_name="类目汇总评分", index=False)
-
-    if raw_rows:
-        raw_all_df = pd.concat(raw_rows, ignore_index=True)
-        raw_all_df.to_excel(writer, sheet_name="原始Top100汇总", index=False)
-
-    score_guide = pd.DataFrame([
+def build_score_guide():
+    return pd.DataFrame([
         ["市场体量", "看类目规模是否足够大", "Top100月总销额、Top100月总销量、中位SKU月销额"],
         ["竞争结构", "看头部是否垄断，长尾是否有空间", "CR10销额占比、CR20销额占比、长尾销额占比"],
         ["价格环境", "看价格是否低到不值得做，以及类目内部是否过于拥挤", "中位价格（低价惩罚）、价格变异系数、核心价格带SKU占比"],
         ["新品成长机会", "看近一年新品是否还有起量机会", "新品数占比、新品销量占比、新品销额占比、Top20新品数、新品爬坡效率"],
-        ["门槛与热度", "看进入门槛和当前活跃度", "前20平均评分数、Top100月新增评分总数、新品月新增评分占比"]
+        ["门槛与热度", "看进入门槛和当前活跃度", "前20平均评分数、Top100月新增评分总数、新品月新增评分占比"],
+        ["打分口径", "各维度得分是本次参与类目之间的相对分位，不是绝对阈值",
+         "前20%记5分、后20%记1分；参与文件集合变化时，同一类目的分数与标签可能随之变化"],
+        ["基准日", "上架天数与新品判定相对「分析基准日」计算",
+         "默认取运行当日，可在界面或 MARKET_ANALYSIS_DATE 指定；实际取值见「参数快照」表"],
     ], columns=["一级维度", "解释", "核心指标"])
-    score_guide.to_excel(writer, sheet_name="评分说明", index=False)
 
-print(f"处理完成，结果已输出到：{OUTPUT_FILE}")
+
+def build_snapshot(analysis_date, date_source, files, summary_df, raw_row_count):
+    rows = [
+        ("分析基准日", f"{analysis_date:%Y-%m-%d}"),
+        ("基准日来源", date_source),
+        ("新品天数阈值", str(NEW_PRODUCT_DAYS)),
+        ("参与类目文件数", str(len(files))),
+        ("参与文件", "；".join(os.path.basename(f) for f in files)),
+        ("成功汇总类目数", str(len(summary_df))),
+        ("原始Top100行数", str(raw_row_count)),
+        ("总分构成", "；".join(f"{name}{weight}分" for name, weight in WEIGHTS.items())),
+        ("打分方式", "各维度按参与类目相对分位打1-5分，加权后折算到100分制"),
+        ("生成时间", dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    ]
+    return pd.DataFrame({"参数": [item[0] for item in rows], "值": [item[1] for item in rows]})
+
+
+# =========================
+# 主入口
+# =========================
+def main():
+    data_dir = os.getenv("MARKET_DATA_DIR", DEFAULT_DATA_DIR)
+    try:
+        output = normalized_path(os.getenv("MARKET_OUTPUT_FILE", DEFAULT_OUTPUT_FILE))
+        if output.suffix.lower() != '.xlsx':
+            raise ValueError('输出必须为 .xlsx 文件。')
+        analysis_date, date_source = resolve_analysis_date(os.getenv("MARKET_ANALYSIS_DATE", ""))
+    except ValueError as exc:
+        print(f"机会得分未完成：{exc}")
+        return 1
+
+    print("=" * 60)
+    print("  市场机会得分")
+    print("=" * 60)
+    print(f"  数据目录:   {data_dir}")
+    print(f"  输出文件:   {output}")
+    print(f"  分析基准日: {analysis_date:%Y-%m-%d}（{date_source}）")
+
+    try:
+        files, excluded = collect_files(data_dir, output)
+    except ValueError as exc:
+        print(f"机会得分未完成：{exc}")
+        return 1
+    for path in excluded:
+        print(f"  已排除输出文件本身，避免把上一次结果当作类目数据读入：{path}")
+    if not files:
+        print(f"机会得分未完成：文件夹中未找到可用作输入的 xlsx 文件：{data_dir}")
+        return 1
+    print(f"  候选文件:   {len(files)} 个")
+
+    summaries = []
+    raw_rows = []
+    for file_path in files:
+        try:
+            summary, raw_df = summarize_category_file(file_path, analysis_date)
+        except Exception as e:
+            print(f"处理失败：{os.path.basename(file_path)} -> {e}")
+            continue
+        if summary is None:
+            continue
+        summaries.append(summary)
+        temp = raw_df.copy()
+        temp["来源文件"] = os.path.basename(file_path)
+        temp["类目ID"] = summary["类目ID"]
+        temp["类目名称"] = summary["类目名称"]
+        raw_rows.append(temp)
+
+    summary_df = pd.DataFrame(summaries)
+    if len(summary_df) == 0:
+        print("机会得分未完成：没有成功汇总出任何类目数据，请检查文件格式。")
+        return 1
+
+    summary_df = apply_scores(summary_df)
+
+    raw_all_df = pd.concat(raw_rows, ignore_index=True) if raw_rows else None
+    sheets = {"类目汇总评分": summary_df}
+    if raw_all_df is not None:
+        sheets["原始Top100汇总"] = raw_all_df
+    sheets["评分说明"] = build_score_guide()
+    sheets["参数快照"] = build_snapshot(analysis_date, date_source, files, summary_df,
+                                       0 if raw_all_df is None else len(raw_all_df))
+
+    try:
+        # 输入目录中的类目文件全部列为保护路径，输出永不覆盖它们。
+        write_excel(output, sheets, protected_paths=tuple(files))
+    except SafeWriteError as exc:
+        print(f"机会得分未完成：{exc}")
+        return 1
+
+    print(f"\n处理完成，结果已输出到：{output}")
+    print(f"分析基准日 {analysis_date:%Y-%m-%d}；参与类目文件 {len(files)} 个；"
+          f"成功汇总 {len(summary_df)} 个类目。分数为这批类目之间的相对分位，"
+          f"参数与文件清单见「参数快照」表。")
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

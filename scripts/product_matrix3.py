@@ -165,6 +165,25 @@ def safe_str(value):
     return str(value).strip()
 
 
+def extract_launch_year(value):
+    """Accept year cells and dates without interpreting numbers as Unix nanoseconds."""
+    if isinstance(value, (bool, np.bool_)) or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    year = re.fullmatch(r"([1-9]\d{3})(?:\.0+)?年?", text)
+    if year:
+        return year.group(1)
+    # Unformatted Excel serials and arbitrary numbers have no unambiguous date
+    # meaning here. Keep accepting compact YYYYMMDD date text as before.
+    numeric_text = re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text)
+    if isinstance(value, (int, float, np.number)) or (numeric_text and not re.fullmatch(r"\d{8}", text)):
+        return ""
+    parsed = pd.to_datetime(text, errors="coerce")
+    return str(parsed.year) if pd.notna(parsed) else ""
+
+
 def download_and_resize_image(url, save_path, target_height=75, max_retries=3):
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -411,9 +430,9 @@ def _merge_variants(bdf, parent_asin_col, sales_col, asin_col, image_col,
         if launch_date_col:
             years = set()
             for r in rows:
-                dt = pd.to_datetime(r.get(launch_date_col), errors="coerce")
-                if pd.notna(dt):
-                    years.add(str(dt.year))
+                year = extract_launch_year(r.get(launch_date_col))
+                if year:
+                    years.add(year)
             if years:
                 sorted_years = sorted(years)
                 summary_parts.append(f"上架时间:{'/'.join(sorted_years)}")

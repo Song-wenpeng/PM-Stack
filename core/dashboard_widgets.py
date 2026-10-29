@@ -1,12 +1,16 @@
 """Native Qt dashboard charts, data table and workbook mapping dialog."""
 import math
+import csv
+import io
+import re
 from pathlib import Path
 
 import pandas as pd
-from PyQt6.QtCore import Qt, QRectF, QPointF, QAbstractTableModel, QSortFilterProxyModel, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPainterPath
+from PyQt6.QtCore import Qt, QRectF, QPointF, QAbstractTableModel, QSortFilterProxyModel, pyqtSignal, QUrl
+from PyQt6.QtGui import QColor, QPainter, QPen, QPainterPath, QFont, QKeySequence, QDesktopServices
 from PyQt6.QtWidgets import (QWidget, QToolTip, QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QComboBox, QToolButton, QFormLayout, QLineEdit, QDialogButtonBox, QScrollArea, QGroupBox)
+    QLabel, QComboBox, QToolButton, QFormLayout, QLineEdit, QDialogButtonBox, QScrollArea, QGroupBox,
+    QTableView, QMenu, QApplication)
 
 from core.dashboard_data import ALIASES, REQUIRED
 from core.dashboard_import import detect_workbook, mapping_for
@@ -17,6 +21,82 @@ def number(value, percent=False):
     if pd.isna(value):
         return '—'
     return f'{value:.1%}' if percent else f'{value:,.2f}'.removesuffix('.00')
+
+
+PRODUCT_URL_ROLE = Qt.ItemDataRole.UserRole + 1
+AMAZON_DOMAINS = {'US': 'amazon.com', 'UK': 'amazon.co.uk', 'GB': 'amazon.co.uk',
+                  'DE': 'amazon.de', 'FR': 'amazon.fr', 'IT': 'amazon.it', 'ES': 'amazon.es',
+                  'CA': 'amazon.ca', 'JP': 'amazon.co.jp', 'AU': 'amazon.com.au'}
+
+
+class DetailTable(QTableView):
+    """Copy the displayed proxy cells and open product links without losing selection."""
+    def copy_cell(self, index):
+        if index.isValid():
+            QApplication.clipboard().setText(str(index.data() or ''))
+
+    def copy_selection(self, whole_rows=False):
+        indexes = self.selectionModel().selectedIndexes()
+        if not indexes:
+            return
+        rows = sorted({index.row() for index in indexes})
+        columns = (range(self.model().columnCount()) if whole_rows
+                   else sorted({index.column() for index in indexes}))
+        selected = {(index.row(), index.column()) for index in indexes}
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter='\t', lineterminator='\n')
+        for row in rows:
+            writer.writerow([str(self.model().index(row, col).data() or '')
+                if whole_rows or (row, col) in selected else '' for col in columns])
+        QApplication.clipboard().setText(output.getvalue().removesuffix('\n'))
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selection()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        index = (self.currentIndex() if event.reason() == event.Reason.Keyboard
+                 else self.indexAt(event.pos()))
+        if index.isValid() and not self.selectionModel().isSelected(index):
+            self.setCurrentIndex(index)
+        menu = QMenu(self)
+        cell = menu.addAction('复制单元格', lambda: self.copy_cell(index))
+        cell.setEnabled(index.isValid())
+        selection = menu.addAction('复制选中内容', lambda: self.copy_selection())
+        selection.setEnabled(self.selectionModel().hasSelection())
+        rows = menu.addAction('复制所选整行', lambda: self.copy_selection(whole_rows=True))
+        rows.setEnabled(self.selectionModel().hasSelection())
+        url = index.data(PRODUCT_URL_ROLE) if index.isValid() else None
+        if url:
+            menu.addSeparator()
+            menu.addAction('打开亚马逊商品页', lambda: QDesktopServices.openUrl(QUrl(url)))
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def mousePressEvent(self, event):
+        self._press_position = event.position().toPoint()
+        self._press_index = self.indexAt(self._press_position)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        index = self.indexAt(event.position().toPoint())
+        if (event.button() == Qt.MouseButton.LeftButton
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier
+                and index.isValid() and index == getattr(self, '_press_index', None)
+                and (event.position().toPoint() - self._press_position).manhattanLength() < QApplication.startDragDistance()):
+            url = index.data(PRODUCT_URL_ROLE)
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        index = self.indexAt(event.position().toPoint())
+        linked = index.isValid() and bool(index.data(PRODUCT_URL_ROLE))
+        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if linked else Qt.CursorShape.ArrowCursor)
 
 
 class FrameModel(QAbstractTableModel):
@@ -38,9 +118,24 @@ class FrameModel(QAbstractTableModel):
         return 0 if parent is not None and parent.isValid() else len(self.frame.columns)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.UserRole, Qt.ItemDataRole.TextAlignmentRole):
+        if not index.isValid():
             return None
         val = self._columns[index.column()][index.row()]
+        if self.frame.columns[index.column()] == 'ASIN' and role in (
+                PRODUCT_URL_ROLE, Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole, Qt.ItemDataRole.ToolTipRole):
+            site = str(self.frame.iloc[index.row()]['站点']).strip().upper() if '站点' in self.frame else ''
+            domain = AMAZON_DOMAINS.get(site)
+            if domain and re.fullmatch(r'[A-Z0-9]{10}', str(val)):
+                url = f'https://www.{domain}/dp/{val}'
+                if role == PRODUCT_URL_ROLE:
+                    return url
+                if role == Qt.ItemDataRole.ForegroundRole:
+                    return QColor(THEME.tokens()['accent'])
+                if role == Qt.ItemDataRole.FontRole:
+                    font = QFont()
+                    font.setUnderline(True)
+                    return font
+                return f'点击打开亚马逊商品页：{url}\nCtrl+C或右键可复制；Ctrl/Shift点击用于多选。'
         if role == Qt.ItemDataRole.UserRole:
             return None if pd.isna(val) else val.item() if hasattr(val, 'item') else val
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):

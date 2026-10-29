@@ -257,6 +257,7 @@ class ModuleWidget(QWidget):
         layout.addWidget(tabs)
         from core.matrix_workspace import MatrixWorkspace
         self.free_matrix = MatrixWorkspace(self)
+        self.free_matrix.setProperty("workspacePage", True)
         tabs.addTab(self.free_matrix, "自由组合矩阵")
         self.matrix_tabs = tabs
 
@@ -372,6 +373,17 @@ class ModuleWidget(QWidget):
             self.matrix2_log.setPlainText("请填写销额列名，或填写数据子表格+月份列。")
             return
 
+        from core.report_io import normalized_path, require_distinct
+        try:
+            output = normalized_path(o or 'product_matrix.xlsx')
+            require_distinct(f, output)
+            if output.suffix.lower() != '.xlsx':
+                raise ValueError('矩阵输出必须为.xlsx文件')
+        except ValueError as exc:
+            self.matrix2_log.setPlainText(str(exc))
+            self.run_btn6._task_bar.summary.setText(str(exc))
+            return False
+
         args = ["--file", f, "--sheet", s]
 
         filter_text = self.matrix2_filter.text().strip()
@@ -396,8 +408,7 @@ class ModuleWidget(QWidget):
         if value_col:
             args += ["--value-col", value_col]
 
-        if o:
-            args += ["--output", o]
+        args += ["--output", str(output)]
 
         self._run("product_matrix2.py", self.matrix2_log, args=args,
                   run_btn=self.run_btn6)

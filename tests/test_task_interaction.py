@@ -205,9 +205,11 @@ class TaskInteractionTests(unittest.TestCase):
         reviews.products_toggle.click()
         self.assertTrue(reviews.products_table.isHidden())
 
-    def test_matrix_export_disabled_until_preview_has_products(self):
+    def test_legacy_matrix_export_requires_a_preview_with_products(self):
         matrix = self.module('产品矩阵').free_matrix
-        self.assertFalse(matrix.data_actions[-1].isEnabled())
+        with patch('core.matrix_workspace.QFileDialog.getSaveFileName') as choose:
+            matrix.export()
+        choose.assert_not_called()
         path = self.workbook('products.xlsx', {'数据': ['ASIN', '品牌']})
         from openpyxl import load_workbook
         book = load_workbook(path)
@@ -216,10 +218,18 @@ class TaskInteractionTests(unittest.TestCase):
         book.close()
         matrix.path.setText(str(path))
         matrix.read_data()
-        self.assertTrue(matrix.data_actions[-1].isEnabled())
+        output = self.root / 'legacy-matrix.xlsx'
+        with patch('core.matrix_workspace.QFileDialog.getSaveFileName',
+                   return_value=(str(output), '')):
+            matrix.export()
+        self.assertTrue(output.exists())
+        import pandas as pd
+        self.assertEqual(pd.read_excel(output, sheet_name='产品明细')['ASIN'].tolist(), ['B000000001'])
         matrix.search.setText('不存在的商品')
         matrix.render()
-        self.assertFalse(matrix.data_actions[-1].isEnabled())
+        with patch('core.matrix_workspace.QFileDialog.getSaveFileName') as choose:
+            matrix.export()
+        choose.assert_not_called()
 
     def test_unified_split_runs_file_and_folder_with_result_link(self):
         import pandas as pd

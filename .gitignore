@@ -40,6 +40,7 @@ Thumbs.db
 # 本机临时任务与展示产物（不进入源码发布）
 *.log
 *.checkpoint.json
+*.normalization.json
 *.fetch_checkpoint.json
 *.pending-*.xlsx
 .env

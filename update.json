@@ -1,8 +1,8 @@
 {
-  "version": "v1.10.20",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.10.20/PM-Stack.exe",
-  "sha256": "1d9660101a1406b62a7ebede87bba9bacd76fceca643c8166dfffd2e96f8a445",
-  "size": 134204307,
+  "version": "v1.11.6",
+  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.6/PM-Stack.exe",
+  "sha256": "ca89e5903a1562366e9dccc85fd41ddefc81b6920e8e2aab30402453b30137c4",
+  "size": 134165028,
   "mandatory": false,
-  "notes": "修复字段提取断点复用：恢复已有成果后重新检查所选字段，只补缺失项，保留有效值与人工修改；完整产品跳过网页补抓，未完整行保留断点，兼容旧版断点并保留历史识别日志。"
+  "notes": "新增明细复制和ASIN跳转、总ASIN指标，恢复自由组合矩阵旧布局，整合字段归一化、文件保护、续跑、配置恢复与更新校验等改进。"
 }

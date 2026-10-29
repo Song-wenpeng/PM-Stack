@@ -37,10 +37,25 @@ def query(**kwargs):
 
 
 class DashboardDataTests(unittest.TestCase):
+    def test_total_asins_include_zero_and_missing_units_and_deduplicate_months(self):
+        frame = fixture()
+        zero = frame[frame['品牌'] == 'A'].assign(ASIN='A2', 销量=0, 销售额=0)
+        missing = zero.assign(ASIN='A3', 销量=np.nan, 销售额=np.nan)
+        loaded = dataset(pd.concat([frame, zero, missing]))
+        q = query(start='2025-12', brand='A')
+        result = analyze(loaded, q)
+        self.assertEqual(result['kpi'].get('总ASIN'), 3)
+        self.assertEqual(result['kpi']['活跃ASIN'], 1)
+        self.assertEqual(analyze(loaded, replace(q, brand=''))['kpi']['总ASIN'], 4)
+        self.assertEqual(analyze(loaded, replace(q, filters={'ASIN': ['A2']}))['kpi']['总ASIN'], 1)
+        empty = analyze(loaded, replace(q, filters={'ASIN': ['absent']}))
+        self.assertEqual(empty['kpi']['总ASIN'], 0)
+        self.assertEqual(empty['kpi']['活跃ASIN'], 0)
+
     def test_fixed_denominator_and_weighted_price(self):
         result = analyze(dataset(), query(brand='A'))
         self.assertEqual(result['kpi']['销售额'], 200)
-        self.assertAlmostEqual(result['kpi']['样本份额'], 1 / 7)
+        self.assertAlmostEqual(result['trend'].iloc[0]['所选品牌份额'], 1 / 7)
         self.assertEqual(len(result['market']), 2)
         self.assertEqual(len(result['detail']), 1)
         all_result = analyze(dataset(), query())
@@ -52,7 +67,7 @@ class DashboardDataTests(unittest.TestCase):
         frame = fixture()
         frame.loc[frame['品牌'] == 'B', '销售额'] = np.nan
         result = analyze(dataset(frame), query(brand='A'))
-        self.assertTrue(pd.isna(result['kpi']['样本份额']))
+        self.assertTrue(pd.isna(result['trend'].iloc[0]['所选品牌份额']))
         self.assertTrue(result['ranking']['份额'].isna().all())
         self.assertTrue(pd.isna(result['trend'].iloc[0]['市场数值']))
         frame['销量'], frame['销售额'] = 0, 0
@@ -70,7 +85,7 @@ class DashboardDataTests(unittest.TestCase):
     def test_attribute_and_price_filters_define_market(self):
         result = analyze(dataset(), query(filters={'插位数': ['6']}, price_max=15))
         self.assertEqual(set(result['market']['品牌']), {'A'})
-        self.assertEqual(result['kpi']['样本份额'], 1)
+        self.assertEqual(result['trend'].iloc[0]['所选品牌份额'], 1)
         with self.assertRaises(ValueError):
             analyze(dataset(), query(filters={'品牌': ['A']}))
         with self.assertRaises(ValueError):
@@ -140,6 +155,13 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(detail.cell(2, header.index('备注') + 1).data_type, 's')
             self.assertEqual(detail.max_row, 3)
             self.assertIn('来源', [row[0].value for row in book['统计口径']])
+            metrics = dict(zip([c.value for c in book['指标'][1]], [c.value for c in book['指标'][2]]))
+            self.assertEqual(metrics['总ASIN'], 2)
+            self.assertNotIn('样本份额', metrics)
+            headers = [c.value for c in book['看板图表'][5]]
+            count_cell = book['看板图表'].cell(6, headers.index('总ASIN') + 1)
+            self.assertEqual(count_cell.value, 2)
+            self.assertEqual(count_cell.number_format, '#,##0')
             book.close()
 
     def test_matrix_snapshot_aggregates_months(self):
@@ -165,9 +187,11 @@ class DashboardUITests(unittest.TestCase):
         self.app.processEvents()
 
     def test_drill_search_sort_and_empty_result(self):
+        self.assertNotIn('样本份额', self.widget.kpis)
+        self.assertEqual(self.widget.kpis['总ASIN'].text(), '总ASIN\n2')
         self.widget.drill_group('A')
         self.assertEqual(self.widget.proxy.rowCount(), 1)
-        self.assertAlmostEqual(self.widget.result['kpi']['样本份额'], 1 / 7)
+        self.assertAlmostEqual(self.widget.result['trend'].iloc[0]['所选品牌份额'], 1 / 7)
         self.widget.search.setText('missing')
         self.assertEqual(self.widget.proxy.rowCount(), 0)
         self.assertFalse(self.widget.matrix_btn.isEnabled())
@@ -261,6 +285,121 @@ class DashboardUITests(unittest.TestCase):
             self.widget.add_filter()
             self.widget.add_filter()
         self.assertEqual(set(self.widget.attribute_controls), {'插位数', '线长'})
+
+    def test_asin_dialog_search_multiselect_updates_market_and_charts(self):
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtWidgets import QListWidget, QDialog, QLineEdit
+        frame = pd.concat([fixture(), fixture().query("ASIN == 'A1'").assign(
+            ASIN='A10', 品牌='C', 销售额=lambda df: df['销售额'] * 2)])
+        self.widget.set_dataset(dataset(frame.assign(父ASIN='PARENT')))
+        self.widget.start.setCurrentText('2026-01')
+
+        def accept_asin(dialog):
+            fields = dialog.findChild(QListWidget)
+            dialog.findChild(QLineEdit).setText('asin')
+            visible = [fields.item(i) for i in range(fields.count()) if not fields.item(i).isHidden()]
+            self.assertEqual({item.text() for item in visible}, {'ASIN', '父ASIN'})
+            next(item for item in visible if item.text() == 'ASIN').setCheckState(Qt.CheckState.Checked)
+            return QDialog.DialogCode.Accepted
+
+        with patch('modules.display_dashboard.QDialog.exec', accept_asin):
+            self.widget.add_filter()
+        combo = self.widget.attribute_controls['ASIN']
+        combo.showPopup()
+        combo.toggle_all(False)
+        combo.search.setText('a1')
+        visible = [combo.options.item(i) for i in range(combo.options.count())
+                   if not combo.options.item(i).isHidden()]
+        self.assertEqual([item.text() for item in visible], ['A1', 'A10'])
+        visible[0].setCheckState(Qt.CheckState.Checked)
+        QTest.mouseClick(combo.apply_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(self.widget.visible_frame()['ASIN'].tolist(), ['A1'])
+        self.assertEqual(self.widget.result['kpi']['销售额'], 200)
+        self.assertEqual(self.widget.result['kpi']['活跃ASIN'], 1)
+        self.assertEqual(self.widget.result['trend']['市场数值'].tolist(), [200])
+        self.assertEqual(self.widget.result['ranking']['分组'].tolist(), ['A'])
+        self.assertEqual(self.widget.result['shares']['A'].tolist(), [1])
+        self.assertEqual(self.widget.result['kpi']['同比'], 3)
+        self.assertEqual(self.widget.result['kpi']['上期比'], 1)
+
+        combo.showPopup()
+        combo.options.item(1).setCheckState(Qt.CheckState.Checked)
+        QTest.mouseClick(combo.apply_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(set(self.widget.result['market']['ASIN']), {'A1', 'A10'})
+        self.assertEqual(self.widget.result['kpi']['销售额'], 600)
+        self.widget.brand.setCurrentText('A')
+        self.assertAlmostEqual(self.widget.result['trend'].iloc[0]['所选品牌份额'], 1 / 3)
+        self.assertEqual(self.widget.result['trend']['市场数值'].tolist(), [600])
+        self.assertEqual(self.widget.result['kpi']['销售额'], 200)
+
+    def test_asin_intersects_attributes_and_can_clear_reset_or_remove(self):
+        self.widget.add_attribute_fields(['ASIN', '插位数'])
+        combo = self.widget.attribute_controls['ASIN']
+        combo.commit(['A1', 'B1'])
+        self.widget.attribute_controls['插位数'].commit(['6'])
+        self.assertEqual(self.widget.visible_frame()['ASIN'].tolist(), ['A1'])
+        self.widget.attribute_controls['插位数'].commit([])
+        combo.commit(['A1'])
+        combo.all_button.click()
+        self.assertNotIn('ASIN', self.widget.query().filters)
+        self.assertEqual(self.widget.result['kpi']['销售额'], 1400)
+        combo.commit(['A1'])
+        self.widget.reset_filters()
+        self.assertEqual(combo.currentText(), '全部')
+        self.assertIn('ASIN', self.widget.attribute_controls)
+        self.assertEqual(self.widget.result['kpi']['销售额'], fixture()['销售额'].sum())
+        combo.commit(['A1'])
+        self.widget.remove_attribute_field('ASIN')
+        self.assertNotIn('ASIN', self.widget.filters)
+        self.assertEqual(self.widget.result['kpi']['销售额'], fixture()['销售额'].sum())
+
+    def test_asin_layout_plan_and_reload_keep_valid_selections(self):
+        self.widget.add_attribute_fields(['ASIN'])
+        self.widget.attribute_controls['ASIN'].commit(['A1', 'B1'])
+        path = Path(self.temp.name) / 'asins.json'
+        with patch('modules.display_dashboard.QFileDialog.getSaveFileName', return_value=(str(path), '')):
+            self.widget.save_plan()
+        self.widget.remove_attribute_field('ASIN')
+        with patch('modules.display_dashboard.QFileDialog.getOpenFileName', return_value=(str(path), '')):
+            self.widget.load_plan()
+        self.assertEqual(self.widget.attribute_controls['ASIN'].selected, ['A1', 'B1'])
+        fresh = ModuleWidget(ConfigManager(self.config.get_path()), None)
+        fresh.set_dataset(dataset())
+        self.assertIn('ASIN', fresh.attribute_controls)
+        self.assertEqual(fresh.attribute_controls['ASIN'].selected, [])
+        self.widget._reload_state = {'query': self.widget.query(), 'latest': '2026-01',
+                                     'fields': ['ASIN'], 'search': ''}
+        self.widget.set_dataset(dataset(fixture().query("ASIN == 'A1'")))
+        self.assertEqual(self.widget.attribute_controls['ASIN'].selected, ['A1'])
+        self.assertEqual(self.widget.result['kpi']['销售额'], 200)
+        self.assertIn('已移除失效筛选：ASIN', self.widget.status.text())
+        self.widget._reload_state = {'query': self.widget.query(), 'latest': '2026-01',
+                                     'fields': ['ASIN'], 'search': ''}
+        self.widget.set_dataset(dataset(fixture().query("ASIN == 'B1'")))
+        self.assertEqual(self.widget.attribute_controls['ASIN'].selected, [])
+        self.assertNotIn('ASIN', self.widget.filters)
+        self.assertEqual(self.widget.result['kpi']['销售额'], 1200)
+        self.assertIn('已移除失效筛选：ASIN', self.widget.status.text())
+
+    def test_asin_filter_export_and_matrix_follow_selected_products(self):
+        self.widget.start.setCurrentText('2025-12')
+        self.widget.add_attribute_fields(['ASIN'])
+        self.widget.attribute_controls['ASIN'].commit(['A1'])
+        out = Path(self.temp.name) / 'asin-report.xlsx'
+        with patch('modules.display_dashboard.QFileDialog.getSaveFileName', return_value=(str(out), '')):
+            self.widget.export()
+        detail = pd.read_excel(out, sheet_name='商品月度明细')
+        self.assertEqual(detail['ASIN'].tolist(), ['A1', 'A1'])
+        self.assertEqual(pd.read_excel(out, sheet_name='指标').iloc[0]['销售额'], 300)
+        self.assertEqual(pd.read_excel(out, sheet_name='市场趋势')['市场数值'].tolist(), [100, 200])
+        scope = pd.read_excel(out, sheet_name='统计口径').set_index('项目')['内容']
+        self.assertIn("'ASIN': ['A1']", scope['filters'])
+        paths = []
+        self.widget.matrix_requested.connect(paths.append)
+        self.widget.send_matrix()
+        products = pd.read_excel(paths[0])
+        self.assertEqual(products['ASIN'].tolist(), ['A1'])
+        self.assertEqual(products.iloc[0]['销售额'], 300)
 
     def test_pinned_layout_survives_reimport_restart_and_plan(self):
         loaded = dataset(fixture().assign(线长='1m'))

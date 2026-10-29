@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 from .secure_storage import SecretStorageError, protect_secret, unprotect_secret
 
@@ -27,6 +28,10 @@ DEFAULT_CONFIG = {
     "theme": "light",
     "nav_expanded": True,
 }
+
+# 视觉模型留空时实际生效的值。此前它只硬编码在两个提取脚本里，
+# 界面却写「留空则使用上方 API 配置」，与实际行为不符。
+DEFAULT_VISION_MODEL = "Qwen/Qwen3-VL-30B-A3B-Instruct"
 
 SECRET_KEYS = ("api_key", "vision_api_key")
 PROTECTED_SUFFIX = "_protected"
@@ -92,22 +97,54 @@ class ConfigManager:
         self._data.update(restored)
         return plaintext_found
 
+    def _quarantine(self, path):
+        """把损坏的配置改名保留，返回新路径；无法改名时返回 None。
+
+        不能原地忽略：后续任何一次 save() 都会用默认配置覆盖它，
+        用户原始内容（哪怕已损坏、仍可手工修复）会无声消失。
+        """
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        base = f"{path}.corrupt-{stamp}"
+        for suffix in ("", "-1", "-2", "-3"):
+            target = base + suffix
+            if os.path.exists(target):
+                continue
+            try:
+                os.replace(path, target)
+                return target
+            except OSError:
+                return None
+        return None
+
+    def _apply_source(self, path, label):
+        """读取并合并一个配置来源；损坏或不可读时不阻止启动。"""
+        try:
+            return self._merge_saved(self._read_json(path))
+        except (OSError, ValueError, TypeError) as exc:
+            quarantined = self._quarantine(path)
+            detail = (f"，原文件已改名保留为 {os.path.basename(quarantined)}，可手工修复后改回原名"
+                      if quarantined else "，原文件保留在原处")
+            self._warnings.append(f"{label}无法读取，已改用默认配置：{exc}{detail}")
+            return False
+
     def load(self):
         plaintext_in_legacy = False
         plaintext_in_user = False
 
         # 先读取发行/项目默认配置，再由用户目录配置覆盖。
         if self._legacy_path and os.path.exists(self._legacy_path):
-            plaintext_in_legacy = self._merge_saved(
-                self._read_json(self._legacy_path)
+            plaintext_in_legacy = self._apply_source(
+                self._legacy_path, f"发行配置 {self._legacy_path}"
             )
         elif getattr(sys, "frozen", False):
             bundled = os.path.join(sys._MEIPASS, "config.json")
             if os.path.exists(bundled):
-                self._merge_saved(self._read_json(bundled))
+                self._apply_source(bundled, "内置默认配置")
 
         if os.path.exists(self._path):
-            plaintext_in_user = self._merge_saved(self._read_json(self._path))
+            plaintext_in_user = self._apply_source(
+                self._path, f"用户配置 {self._path}"
+            )
 
         # 旧版本明文密钥仅在成功写入 DPAPI 保护配置后才清理。
         if plaintext_in_legacy or plaintext_in_user:
@@ -285,6 +322,14 @@ class ConfigManager:
             return plugin_script
         return os.path.join(self.get_script_dir(), filename)
 
+    def effective_vision_model(self):
+        """视觉模型留空时实际生效的模型名。
+
+        不回退到上方的文本模型：默认文本模型不支持图片输入，
+        继承只会让图片识别静默失败，因此这里回退到内置视觉模型。
+        """
+        return str(self._data.get("vision_model_name") or "").strip() or DEFAULT_VISION_MODEL
+
     def get_env_dict(self):
         """返回用于 subprocess 的环境变量字典"""
         env = dict(os.environ)
@@ -294,11 +339,11 @@ class ConfigManager:
             env["BASE_URL"] = self._data["base_url"]
         if self._data.get("model_name"):
             env["MODEL_NAME"] = self._data["model_name"]
-        # 视觉模型（图片识别用）
+        # 视觉模型（图片识别用）：Key 与 Base URL 留空时由脚本回退到上方配置，
+        # 模型名则始终显式导出，避免脚本内的硬编码默认值与界面文案不一致。
         if self._data.get("vision_api_key"):
             env["VISION_API_KEY"] = self._data["vision_api_key"]
         if self._data.get("vision_base_url"):
             env["VISION_BASE_URL"] = self._data["vision_base_url"]
-        if self._data.get("vision_model_name"):
-            env["MODEL_VISION"] = self._data["vision_model_name"]
+        env["MODEL_VISION"] = self.effective_vision_model()
         return env

@@ -18,8 +18,22 @@ from .paths import BACKUP_DIR, DATA_DIR
 
 FORMAT = 1
 TASK_PATHS = ('input', 'config', 'step1', 'report', 'log')
-EXCLUDED_SETTINGS = ('supabase_', 'review_data_scope')
+# 本机凭据不随备份外流：配对令牌保护的是本机回环服务，
+# 谁拿到它就能冒充已授权的浏览器扩展。缺失时桥接会自动重新生成并重新配对。
+CREDENTIAL_SETTINGS = ('extension_pairing_token',)
+EXCLUDED_SETTINGS = ('supabase_', 'review_data_scope') + CREDENTIAL_SETTINGS
 MAX_BYTES = 20 * 1024**3
+
+
+def scrub_credentials(db_path):
+    """删除数据库中的本机凭据设置，使恢复后的备份必须重新配对。"""
+    with closing(sqlite3.connect(db_path)) as conn:
+        try:
+            for key in CREDENTIAL_SETTINGS:
+                conn.execute('DELETE FROM settings WHERE key=?', (key,))
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 很旧的数据库可能还没有 settings 表。
 
 
 def digest(path):
@@ -248,6 +262,10 @@ class BackupManager:
         with tempfile.TemporaryDirectory(prefix='pmstack-apply-', dir=self.root) as temporary:
             stage = Path(temporary)
             self.inspect(self.pending/'archive.zip', stage)
+            # 旧备份可能仍带有配对令牌；在落回本机之前先清除。
+            staged_db = stage/'database/reviews.db'
+            if staged_db.exists():
+                scrub_credentials(staged_db)
             safety, _ = self.create(kind='before_restore')
             records = json.loads((stage/'analysis/tasks.json').read_text(encoding='utf-8'))
             artifact_root = self.root / 'restored_review_files' / uuid.uuid4().hex

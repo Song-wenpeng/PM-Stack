@@ -9,12 +9,12 @@ from PyQt6.QtCore import (Qt, QObject, QRunnable, QThreadPool, pyqtSignal,
                           QSortFilterProxyModel)
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QTabWidget,
-    QScrollArea, QFileDialog, QMessageBox, QDialog, QTableView, QAbstractItemView,
+    QScrollArea, QFileDialog, QMessageBox, QDialog, QAbstractItemView,
     QHeaderView, QListWidget, QListWidgetItem, QDialogButtonBox, QTextEdit, QToolButton, QFrame)
 
 from core.dashboard_data import (normalize, from_history, analyze, Query,
                                  METRICS, product_snapshot, export_report)
-from core.dashboard_widgets import Chart, FrameModel, DetailProxy, ImportDialog, number
+from core.dashboard_widgets import Chart, FrameModel, DetailProxy, DetailTable, ImportDialog, number
 from core.dashboard_import import load_workbook
 from core.dashboard_filters import AttributeCombo
 from core.dashboard_combo import DashboardCombo
@@ -156,7 +156,7 @@ class ModuleWidget(QWidget):
         body = QVBoxLayout(dashboard)
         kpis = QGridLayout()
         self.kpis = {}
-        for i, name in enumerate(['销售额', '销量', '加权均价', '活跃ASIN', '样本份额', '同比', '上期比', '数据覆盖率']):
+        for i, name in enumerate(['销售额', '销量', '加权均价', '活跃ASIN', '总ASIN', '同比', '上期比', '数据覆盖率']):
             label = QLabel(name + '\n—')
             label.setObjectName('DashboardKPI')
             label.setMinimumHeight(64)
@@ -203,12 +203,14 @@ class ModuleWidget(QWidget):
         self.proxy.setFilterKeyColumn(-1)
         self.proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.search.textChanged.connect(self.search_changed)
-        self.table = QTableView()
+        self.table = DetailTable()
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
         self.proxy.sort(-1)  # Keep input order until the user explicitly sorts a column.
         self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.setMouseTracking(True)
+        self.table.setToolTip('选中单元格后按Ctrl+C复制，右键可复制单元格或整行；点击ASIN打开对应亚马逊商品页。')
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -349,6 +351,7 @@ class ModuleWidget(QWidget):
         excluded = {'ASIN', '月份', '站点', '币种', '均价', *METRICS}
         excluded.update(c for c in frame.columns if c.startswith('image_') or any(part in c for part in ('链接', '描述', '主图', '详细参数', '卖家信息', '标题')) or c == '图片')
         self.dimensions = list(dict.fromkeys(['品牌', '品类', *dataset.feature_fields, *[c for c in frame.columns if c not in excluded]]))
+        self.filter_fields = list(dict.fromkeys([*self.dimensions, 'ASIN']))
         self.fill(self.group, self.dimensions)
         self.group.setCurrentText('品牌')
         self.filters = {}
@@ -396,7 +399,8 @@ class ModuleWidget(QWidget):
             missing.append('关注品牌')
         self.filters = {}
         for field, values in q.filters.items():
-            kept = [v for v in values if field in frame and v in set(frame[field])]
+            valid_values = set(frame[field]) if field in frame else set()
+            kept = [v for v in values if v in valid_values]
             if kept != values:
                 missing.append(field)
             if kept:
@@ -405,7 +409,7 @@ class ModuleWidget(QWidget):
                 else:
                     self.filters[field] = kept
         for field in state['fields']:
-            if field not in self.dimensions:
+            if field not in self.filter_fields:
                 missing.append(field)
         self.restore_attribute_fields(state['fields'])
         self.group.setCurrentText(q.group if q.group in self.dimensions else '品牌')
@@ -467,7 +471,9 @@ class ModuleWidget(QWidget):
         self.result = result
         self.focus = None
         for name, label in self.kpis.items():
-            label.setText(f'{name}\n{number(result["kpi"][name], name in ("样本份额", "同比", "上期比", "数据覆盖率"))}')
+            label.setText(f'{name}\n{number(result["kpi"][name], name in ("同比", "上期比", "数据覆盖率"))}')
+        self.kpis['总ASIN'].setToolTip('当前筛选及关注品牌范围内的商品总数，按ASIN去重；包含零销量及销量缺失的商品，跨月不重复计数。')
+        self.kpis['活跃ASIN'].setToolTip('与总ASIN使用相同范围；所选期间内至少一个月销量大于0的商品数，按ASIN去重。')
         self.kpis['同比'].setToolTip(f'{query.metric}与去年相同月份比较；数据不足或基期为 0 时不计算。')
         self.kpis['上期比'].setToolTip(f'{query.metric}与紧邻的前一个等长时间段比较；单月即环比。')
         top = result['top']
@@ -581,7 +587,7 @@ class ModuleWidget(QWidget):
 
     def add_attribute_fields(self, fields, remember=True):
         for field in fields:
-            if field not in self.dimensions or field in self.attribute_controls or field in ('品牌', '品类'):
+            if field not in self.filter_fields or field in self.attribute_controls or field in ('品牌', '品类'):
                 continue
             cell = QWidget()
             box = QVBoxLayout(cell)
@@ -643,7 +649,7 @@ class ModuleWidget(QWidget):
         search.setPlaceholderText('搜索属性名称')
         layout.addWidget(search)
         fields = QListWidget()
-        for field in self.dimensions:
+        for field in self.filter_fields:
             if field in ('品牌', '品类') or field in self.attribute_controls:
                 continue
             item = QListWidgetItem(field)
@@ -665,7 +671,7 @@ class ModuleWidget(QWidget):
             self.add_attribute_fields(chosen)
 
     def visible_frame(self, selected=False):
-        rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()}) if selected else []
+        rows = sorted({index.row() for index in self.table.selectionModel().selectedIndexes()}) if selected else []
         if not rows:
             rows = range(self.proxy.rowCount())
         source = [self.proxy.mapToSource(self.proxy.index(i, 0)).row() for i in rows]
@@ -740,7 +746,7 @@ class ModuleWidget(QWidget):
             if q.currency not in set(data.loc[data['站点'] == q.site, '币种']):
                 raise ValueError('方案站点下没有该币种。')
             fields = saved.get('attribute_fields', list(q.filters))
-            if not isinstance(fields, list) or any(not isinstance(f, str) or f not in self.dimensions for f in fields):
+            if not isinstance(fields, list) or any(not isinstance(f, str) or f not in self.filter_fields for f in fields):
                 raise ValueError('方案中的常驻属性与当前数据不匹配。')
             analyze(self.dataset, q)  # Validate everything before changing the UI.
             self.loading = True

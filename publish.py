@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """一键发布新版本：打包 EXE → 生成 update.json → 推送 GitHub → 创建 Release"""
 
+import argparse
 import hashlib
 import json
 import os
@@ -89,6 +90,60 @@ def run(cmd, **kwargs):
     return result
 
 
+def _release_command(command):
+    result = subprocess.run(command, cwd=PROJECT_DIR, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace")
+    if result.returncode:
+        detail = (result.stderr or result.stdout or "command failed").strip()
+        raise RuntimeError(detail)
+    return result.stdout
+
+
+def prepare_release_handoff(record_arg, current_version, new_version):
+    """Validate an explicit task record before changing files or building."""
+    try:
+        project = PROJECT_DIR.resolve()
+        record = (project / record_arg).resolve(strict=True)
+        relative = record.relative_to(project).as_posix()
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Use an existing task record inside this project's handoffs/.") from exc
+    if (record.parent != (project / "handoffs").resolve()
+            or record.suffix.lower() != ".md"
+            or record.name.upper() in {"TEMPLATE.MD", "README.MD"}):
+        raise RuntimeError("Use handoffs/<task>.md; the template is not a release record.")
+    staged = _release_command(["git", "diff", "--cached", "--name-only", "-z"])
+    if staged:
+        raise RuntimeError("Release requires an empty Git index; commit other staged work separately.")
+    changed = set(filter(None, _release_command(
+        ["git", "diff", "HEAD", "--name-only", "--no-renames", "-z"]).split("\0")))
+    changed.update(filter(None, _release_command(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"]).split("\0")))
+    unexpected = changed - {relative, "CURRENT.md"}
+    if unexpected:
+        raise RuntimeError("Commit pending work before release: " + ", ".join(sorted(unexpected)))
+    if relative not in changed:
+        raise RuntimeError("Update the selected handoff record for this release before building.")
+    required = ["core/main_window.py", "update.json"]
+    if available_spec_templates():
+        required.append(f"PM Stack {new_version}.spec")
+    old_spec = project / f"PM Stack {current_version}.spec"
+    if current_version.startswith("v") and old_spec.is_file():
+        required.extend([old_spec.name, "specs/archive/" + old_spec.name])
+    command = [sys.executable, str(project / "tools" / "handoff.py"),
+               "validate", "--repo", str(project), "--record", relative]
+    for path in required:
+        command.extend(["--require-path", path])
+    _release_command(command)
+    return relative, "CURRENT.md" in changed
+
+
+def stage_release_handoff(record_rel, index_changed):
+    """Stage only this release's record and optional index, then check the index."""
+    paths = [record_rel] + (["CURRENT.md"] if index_changed else [])
+    _release_command(["git", "add", "--", *paths])
+    _release_command([sys.executable, str(PROJECT_DIR / "tools" / "handoff.py"),
+                      "check", "--repo", str(PROJECT_DIR), "--staged"])
+
 def prepare_release_artifacts(version):
     """生成干净的当前分发目录、版本归档和首次分发压缩包。"""
     distribution_files = (
@@ -133,6 +188,9 @@ def prepare_release_artifacts(version):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--handoff", required=True, help="Updated handoffs/<task>.md for this release")
+    args = parser.parse_args()
     if sys.version_info < (3, 12):
         raise RuntimeError("发布需要 Python 3.12+，请使用 .venv-review/Scripts/python.exe publish.py")
     os.chdir(PROJECT_DIR)
@@ -151,6 +209,12 @@ def main():
         new_version = "v" + new_version
 
     notes = input("版本说明 (可留空): ").strip() or f"发布 {new_version}"
+
+    try:
+        record_rel, index_changed = prepare_release_handoff(args.handoff, current, new_version)
+    except RuntimeError as exc:
+        print(f"交接预检失败，未开始发布：{exc}")
+        return 1
 
     print("\n[1/6] 更新版本号...")
     set_version(new_version)
@@ -210,6 +274,11 @@ def main():
         run(["git", "add", str(spec_file)])
     if archived_spec:
         run(["git", "add", "-A", "--", "specs/", f"PM Stack {current}.spec"])
+    try:
+        stage_release_handoff(record_rel, index_changed)
+    except RuntimeError as exc:
+        print(f"交接检查失败，未提交或推送：{exc}")
+        return 1
     run(["git", "commit", "-m", f"发布 {new_version}"])
     run(["git", "push"])
 
@@ -237,4 +306,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

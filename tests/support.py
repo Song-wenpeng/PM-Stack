@@ -6,6 +6,7 @@ still be retained by test tracebacks or queued deferred-delete events.
 """
 
 import atexit
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -20,6 +21,17 @@ for key in ("LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"):
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 tempfile.tempdir = str(DATA_ROOT)
 _app = None
+
+# The project root ships update-channel.json, so a default ConfigManager would
+# start a real GitHub update check in every test that builds MainWindow.
+# Seed the sandboxed user config to keep tests offline; individual tests may
+# still override these flags.
+_default_config_dir = DATA_ROOT / "PM Stack"
+_default_config_dir.mkdir(parents=True, exist_ok=True)
+(_default_config_dir / "config.json").write_text(json.dumps({
+    "auto_check_app_update": False,
+    "auto_check_update": False,
+}), encoding="utf-8")
 
 
 def qt_app():

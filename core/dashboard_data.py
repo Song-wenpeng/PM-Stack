@@ -255,7 +255,7 @@ def analyze(dataset, query):
             'trend': trend.reset_index(), 'shares': shares.reset_index(),
             'kpi': {'销量': units, '销售额': revenue, '加权均价': mean_price,
                     '活跃ASIN': detail.loc[detail['销量'] > 0, 'ASIN'].nunique(),
-                    '样本份额': ratio(aggregate(detail[query.metric]), market_total),
+                    '总ASIN': detail['ASIN'].nunique(),
                     '同比': growth(-12), '上期比': growth(-len(periods)),
                     '数据覆盖率': ratio(int(detail[query.metric].notna().sum()), len(detail))},
             'missing_months': sorted(set(months) - available), 'others_label': others_label,
@@ -303,7 +303,8 @@ def export_report(path, dataset, query, result, visible_detail=None, detail_cont
             for i, (label, value) in enumerate(result['kpi'].items()):
                 overview.write_string(4, i, label)
                 if pd.notna(value):
-                    fmt = writer.book.add_format({'num_format': '0.0%' if label in ('样本份额', '同比', '上期比', '数据覆盖率') else '#,##0.00'})
+                    fmt = writer.book.add_format({'num_format': ('#,##0' if label in ('总ASIN', '活跃ASIN')
+                        else '0.0%' if label in ('同比', '上期比', '数据覆盖率') else '#,##0.00')})
                     overview.write_number(5, i, value, fmt)
             for name, frame in [('商品月度明细', visible_detail if visible_detail is not None else result['detail']),
                                 ('品牌或属性排名', result['ranking']), ('市场趋势', result['trend']),

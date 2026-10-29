@@ -1,0 +1,39 @@
+name: Handoff check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  handoff-check:
+    name: handoff-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check the checker and release integration
+        run: python -m unittest tests.test_handoff_gate tests.test_publish_handoff
+      - name: Check handoff for this change range
+        env:
+          HANDOFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          base = os.environ.get('HANDOFF_BASE', '')
+          if not base or set(base) == {'0'}:
+              # Bootstrap/new branch: do not retroactively audit old history.
+              result = subprocess.run(['git', 'rev-parse', 'HEAD^'], capture_output=True, text=True)
+              if result.returncode:
+                  print('Initial commit: no previous range to check.')
+                  sys.exit(0)
+              base = result.stdout.strip()
+          subprocess.run([sys.executable, 'tools/handoff.py', 'check', '--base', base], check=True)
+          PY

@@ -34,7 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from core.field_row_filter import select_field_rows
 from core.field_workbook import FieldWorkbookWriter, source_fingerprint
-from core.field_values import is_empty_field as is_empty
+from core.field_values import is_empty_extracted_field as is_empty, normalization_enabled
+from core.field_normalization import normalize_after_extraction
 import requests
 from openai import OpenAI
 from PIL import Image
@@ -1129,6 +1130,7 @@ def main():
     signature['fields'] = target_fields
     signature['enable_vision'] = enable_vision
     signature['enable_fetch'] = ENABLE_FETCH
+    signature['normalize'] = normalization_enabled()
     signature['product_rules'] = product_config
     checkpoint = CheckpointStore(checkpoint_path, signature)
     if checkpoint.load_warning:
@@ -1473,6 +1475,13 @@ def main():
 
     # 最终保存
     writer.save(df.loc[selected_indices])
+    normalization_ok = normalize_after_extraction(
+        df, target_fields, selected_indices, product_config, writer,
+        get_text_client, MODEL_TEXT,
+        stopped=lambda: stop_event.is_set() or check_stop_file(),
+        limiter=text_limiter, metrics=text_metrics)
+    if normalization_enabled() and check_stop_file():
+        stats['stopped'] = True
     checkpoint.data['signature']['source_content'] = source_fingerprint(INPUT_FILE, product_config['target_fields'])
     checkpoint.save()
 
@@ -1503,8 +1512,12 @@ def main():
         raise SystemExit(1)
 
     # Only remove recovery data when all selected fields are actually filled.
-    if stats["failed"] == 0 and incomplete == 0:
+    if stats["failed"] == 0 and incomplete == 0 and normalization_ok:
         checkpoint.remove()
+
+    if not normalization_ok:
+        print('[归一化] 部分特征尚未完成，提取结果及映射已保存；再次执行可继续。', flush=True)
+        raise SystemExit(2)
 
     print(f"\n处理完成！结果已保存至：{OUTPUT_FILE_LOCAL}", flush=True)
 

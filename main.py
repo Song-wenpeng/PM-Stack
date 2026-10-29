@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""PM Stack v1.11.5 — 自动关联商品特征与历史销量"""
+"""PM Stack v1.11.6 — 自动关联商品特征与历史销量"""
 
 import sys
 import os
@@ -40,7 +40,7 @@ def main():
     except Exception as exc:
         QMessageBox.warning(None, '本地备份恢复失败', f'恢复未完成，继续使用原数据。可在数据与备份中取消待恢复。\n{exc}')
     # 主题 QSS 由 MainWindow 按配置应用（明/暗双主题）
-    window = MainWindow()
+    window = MainWindow(startup_warnings=config.get_warnings())
     if '--dashboard-research-check' in sys.argv:
         from core.dashboard_research_check import verify_research
         position = sys.argv.index('--dashboard-research-check')

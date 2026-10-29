@@ -83,7 +83,7 @@ class DashboardImportTests(unittest.TestCase):
         self.assertTrue(pd.isna(analyze(data, q)['kpi']['销售额']))
         q.start = q.end = '2026-01'
         r = analyze(data, q)
-        self.assertEqual(r['kpi']['样本份额'], .75)
+        self.assertEqual(r['trend'].iloc[0]['所选品牌份额'], .75)
         self.assertTrue(pd.isna(r['kpi']['同比']))
 
     def test_feature_filter_and_matrix_use_the_same_history(self):

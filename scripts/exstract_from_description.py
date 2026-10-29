@@ -2,7 +2,8 @@
 import pandas as pd
 from core.field_row_filter import select_field_rows
 from core.field_workbook import FieldWorkbookWriter
-from core.field_values import is_empty_field as is_empty
+from core.field_values import is_empty_extracted_field as is_empty
+from core.field_normalization import normalize_after_extraction
 import time
 import os
 import json
@@ -625,7 +626,11 @@ def main():
     print(f"图片可补字段数量：{len(VISION_ALLOWED_FIELDS)}")
     print(f"图片批量大小：{VISION_BATCH_SIZE}")
 
+    was_stopped = False
     for index, row in tqdm(df.iterrows(), total=len(df), desc="AI处理进度"):
+        if STOP_FILE and os.path.exists(STOP_FILE):
+            was_stopped = True
+            break
         if index not in selected_set:
             continue
         already_done = True
@@ -760,7 +765,7 @@ def main():
 
         # 检查停止信号
         if STOP_FILE and os.path.exists(STOP_FILE):
-            os.remove(STOP_FILE)
+            was_stopped = True
             print(f"\n[停止] 收到停止信号，保存已处理数据后退出。")
             for pending_index in [i for i in selected_indices if i > index]:
                 df.at[pending_index, "_处理状态"] = "已停止"
@@ -768,6 +773,16 @@ def main():
 
     os.makedirs(os.path.dirname(OUTPUT_FILE) or ".", exist_ok=True)
     writer.save(df.loc[selected_indices])
+    normalization_ok = normalize_after_extraction(
+        df, TARGET_FIELDS, selected_indices, PRODUCT_CONFIG, writer,
+        lambda: client, MODEL_TEXT,
+        stopped=lambda: was_stopped or bool(STOP_FILE and os.path.exists(STOP_FILE)))
+    if was_stopped or STOP_FILE and os.path.exists(STOP_FILE):
+        print('[停止] 已保存提取结果，归一化尚未完成。', flush=True)
+        raise SystemExit(1)
+    if not normalization_ok:
+        print('[归一化] 部分特征尚未完成，再次执行可继续。', flush=True)
+        raise SystemExit(2)
     print(f"\n处理完成！结果已保存至：{OUTPUT_FILE}")
 
 

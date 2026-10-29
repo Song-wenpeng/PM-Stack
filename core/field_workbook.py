@@ -14,7 +14,7 @@ from openpyxl import load_workbook, LXML
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, TwoCellAnchor, AbsoluteAnchor
-from .field_values import is_empty_field
+from .field_values import is_empty_extracted_field as is_empty_field
 
 LOG_SHEET = '字段提取日志'
 LOG_FIELDS = ['文本提取字段', '图片识别提取字段', '图片识别批次日志',
@@ -90,9 +90,14 @@ class FieldWorkbookWriter:
         if self.source.suffix.lower() != '.xlsx' or self.output.suffix.lower() != '.xlsx':
             raise ValueError('写回保留格式目前支持 .xlsx，请先将文件另存为 .xlsx。')
         self.expected = digest(self.source)
+        self.output_expected = digest(self.output) if self.output.exists() else None
         self.backup = None
         wb = load_workbook(self.source)
         try:
+            ws = wb.worksheets[0]
+            self.formula_cells = {(c.row - 2, ws.cell(1, c.column).value)
+                                  for row in ws.iter_rows(min_row=2) for c in row
+                                  if c.data_type == 'f'}
             self._prepare(wb)  # validate before starting expensive extraction
         finally:
             wb.close()
@@ -183,11 +188,15 @@ class FieldWorkbookWriter:
                         cell.hyperlink = copy(original.hyperlink)
                 if isinstance(item, str):
                     template = saved.get((row, template_col)) or saved[(1, template_col)]
-                    cell._style = copy(template._style)
+                    if not old:
+                        cell._style = copy(template._style)
                     alignment = copy(cell.alignment)
                     alignment.wrap_text = True
                     cell.alignment = alignment
-                    cell.number_format = '0' if item == '包装数' and row > 1 else 'General'
+                    if item == '包装数' and row > 1:
+                        cell.number_format = '0'
+                    elif not old:
+                        cell.number_format = 'General'
                     if item == '包装数' and row > 1 and re.fullmatch(r'\d+(?:\.0+)?', str(cell.value).strip()):
                         cell.value = int(float(cell.value))
                     if row == 1:
@@ -209,9 +218,11 @@ class FieldWorkbookWriter:
         finally:
             wb.close()
 
-    def save(self, df):
+    def save(self, df, *, replacements=None):
         if digest(self.source) != self.expected:
             raise RuntimeError('源文件在提取期间被其他程序修改，已停止写回；请保留断点并重新运行。')
+        if self.output != self.source and (digest(self.output) if self.output.exists() else None) != self.output_expected:
+            raise RuntimeError('输出文件在提取期间被其他程序修改，已停止写回；请保留断点并重新运行。')
         wb = load_workbook(self.source)
         temp = None
         try:
@@ -238,6 +249,29 @@ class FieldWorkbookWriter:
                     cell.value = value
                     if isinstance(value, str):
                         cell.data_type = 's'  # model text must never become a formula
+            # Normalization is the only explicit nonempty overwrite path. A
+            # complete plan is validated before any part can reach the file.
+            seen = set()
+            for change in replacements or []:
+                index, name = change['index'], change['field']
+                key = (index, name)
+                if (key in seen or index not in df.index or name not in self.fields
+                        or name not in headers or key in self.formula_cells):
+                    raise ValueError('归一化替换超出本次行/字段范围，或重复/引用了公式。')
+                seen.add(key)
+                cell = ws.cell(int(index) + 2, headers[name])
+                before = change['original']
+                if name == '包装数' and re.fullmatch(r'\d+(?:\.0+)?', str(before).strip()):
+                    before = int(float(before))
+                if (cell.data_type == 'f' or cell.value != before
+                        or isinstance(cell.value, bool) != isinstance(before, bool)):
+                    raise RuntimeError('归一化原值已变化，已停止写回；请重新运行。')
+                value = change['value']
+                if not isinstance(value, (str, int, float, bool)) or is_empty_field(value):
+                    raise ValueError('归一化目标必须是非空单元格值。')
+                cell.value = value
+                if isinstance(value, str):
+                    cell.data_type = 's'
             log = wb[LOG_SHEET] if LOG_SHEET in wb else wb.create_sheet(LOG_SHEET)
             if log.max_row == 1 and log.cell(1, 1).value is None:
                 for col, name in enumerate(LOG_HEADERS, 1):
@@ -291,6 +325,8 @@ class FieldWorkbookWriter:
                         os.unlink(normalized)
             if digest(self.source) != self.expected:
                 raise RuntimeError('源文件保存期间发生变化；结果已保存在 ' + temp)
+            if self.output != self.source and (digest(self.output) if self.output.exists() else None) != self.output_expected:
+                raise RuntimeError('输出文件保存期间发生变化；结果已保存在 ' + temp)
             if self.backup is None and self.output == self.source:
                 self.backup = self.source.with_name(self.source.stem + '.backup_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.xlsx')
                 shutil.copy2(self.source, self.backup)
@@ -300,5 +336,6 @@ class FieldWorkbookWriter:
             except OSError as exc:
                 raise RuntimeError(f'无法写回，请关闭 Excel/WPS 后重试。已完成结果保留在：{temp}') from exc
             self.expected = digest(self.source)
+            self.output_expected = digest(self.output)
         finally:
             wb.close()

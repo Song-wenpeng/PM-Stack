@@ -5,27 +5,14 @@ from pathlib import Path
 
 import pandas as pd
 from PyQt6.QtCore import Qt, QSize, QUrl, QEvent, QTimer, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QColor, QPainter
+from PyQt6.QtGui import QPixmap, QIcon, QColor
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox,
     QListWidget, QListWidgetItem, QAbstractItemView, QTableWidget, QTableWidgetItem,
     QHeaderView, QFileDialog, QLabel, QPushButton, QSplitter, QMessageBox,
-    QScrollArea, QFrame,
 )
-from core.widgets import FileDropLineEdit, file_row, ActionBar, make_button, configure_combo
-from core.theme import THEME
-
-
-class MatrixPreview(QTableWidget):
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.rowCount() == 0 and self.columnCount() == 0:
-            painter = QPainter(self.viewport())
-            painter.setPen(QColor(THEME.tokens()['text2']))
-            painter.drawText(self.viewport().rect().adjusted(20, 20, -20, -20),
-                             Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-                             '选择 Excel 并读取数据\n再从字段库拖入横向、纵向分组，预览产品矩阵')
+from core.widgets import FileDropLineEdit, file_row
 
 
 class FieldSlot(QComboBox):
@@ -232,7 +219,6 @@ def hierarchy_spans(keys):
 class MatrixWorkspace(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty('workspacePage', True)
         self.frame = None
         self.image_cache = {}
         self.network = QNetworkAccessManager(self)
@@ -241,14 +227,10 @@ class MatrixWorkspace(QWidget):
         self.row_names = []
         self.col_names = []
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
         source = QHBoxLayout()
         self.path = FileDropLineEdit(placeholder='选择 Excel 后读取 Sheet')
         source.addLayout(file_row(self.path, 'open', parent=self))
-        self.sheets = configure_combo(QComboBox())
-        self.sheets.setMinimumWidth(120)
-        self.sheets.setMaximumWidth(180)
+        self.sheets = QComboBox()
         source.addWidget(self.sheets)
         read = QPushButton('读取数据')
         read.clicked.connect(self.read_data)
@@ -261,11 +243,10 @@ class MatrixWorkspace(QWidget):
         split.setHandleWidth(6)
         layout.addWidget(split, 1)
         controls = QWidget()
-        controls.setObjectName('MatrixPanel')
         left = QVBoxLayout(controls)
-        controls.setMinimumWidth(130)
+        controls.setMinimumWidth(145)
         controls.setMaximumWidth(210)
-        left.setContentsMargins(12, 12, 12, 12)
+        left.setContentsMargins(2, 2, 2, 2)
         left.addWidget(QLabel('字段库'))
         field_search = QLineEdit()
         field_search.setPlaceholderText('搜索字段名称')
@@ -276,86 +257,73 @@ class MatrixWorkspace(QWidget):
         self.fields.setDefaultDropAction(Qt.DropAction.CopyAction)
         left.addWidget(self.fields)
         self.fields.setToolTip('拖到右侧设置分组；勾选或取消勾选可展示或隐藏卡片字段')
-        left.addWidget(QLabel('拖入分组区域；勾选字段\n可添加到产品卡片。'))
         field_search.textChanged.connect(self.filter_fields)
         split.addWidget(controls)
         canvas = QWidget()
-        canvas.setObjectName('MatrixPanel')
         right = QVBoxLayout(canvas)
-        right.setContentsMargins(12, 12, 12, 12)
-        self.horizontal = AxisEditor()
+        right.setContentsMargins(0, 0, 0, 0)
+        self.horizontal = AxisEditor(compact=True)
         self.vertical = AxisEditor()
-        for axis in (self.horizontal, self.vertical):
-            axis.levels.setMaximumHeight(70)
-            axis.values.setMinimumHeight(48)
-            axis.values.setMaximumHeight(100)
         self.sort = FieldSlot()
-        self.direction = configure_combo(QComboBox())
+        self.direction = QComboBox()
         self.direction.addItems(['从旧到新 / 升序', '从新到旧 / 降序'])
         toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel('格内排序'))
+        toolbar.addWidget(self.sort)
+        toolbar.addWidget(self.direction)
         self.search = QLineEdit()
         self.search.setPlaceholderText('按 ASIN、品牌或任意文字筛选')
         toolbar.addWidget(self.search, 1)
         swap = QPushButton('交换横纵轴')
         swap.clicked.connect(self.swap_axes)
         toolbar.addWidget(swap)
-        self.config_toggle = make_button('布局配置')
-        self.config_toggle.setCheckable(True)
-        self.config_toggle.setChecked(True)
-        toolbar.addWidget(self.config_toggle)
         right.addLayout(toolbar)
         self.drop_targets = {}
-        right.addWidget(QLabel('矩阵预览'))
+        self.canvas_split = QSplitter(Qt.Orientation.Vertical)
+        self.canvas_split.setChildrenCollapsible(False)
+        self.canvas_split.setHandleWidth(6)
+        self.canvas_split.addWidget(self.make_drop_zone('横向分组', 'horizontal', self.horizontal))
+        middle = QSplitter(Qt.Orientation.Horizontal)
+        self.matrix_split = middle
+        middle.setChildrenCollapsible(False)
+        middle.setHandleWidth(6)
+        vertical_zone = self.make_drop_zone('纵向分组', 'vertical', self.vertical)
+        vertical_zone.setMinimumWidth(150)
+        middle.addWidget(vertical_zone)
+        preview = QWidget()
+        center = QVBoxLayout(preview)
+        center.setContentsMargins(0, 0, 0, 0)
         self.card_summary = QLabel('卡片字段')
-        self.card_summary.setObjectName('FormHint')
         self.card_summary.setToolTip('拖入字段添加卡片内容，取消左侧勾选可移除')
         self.register_drop_target(self.card_summary, 'cards')
-        right.addWidget(self.card_summary)
-        self.table = MatrixPreview()
-        self.table.setMinimumSize(180, 220)
+        center.addWidget(self.card_summary)
+        self.table = QTableWidget()
+        self.table.setMinimumHeight(340)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.register_drop_target(self.table.viewport(), 'cards')
-        right.addWidget(self.table, 1)
-        split.addWidget(canvas)
-        config = QWidget()
-        config.setObjectName('MatrixPanel')
-        settings = QVBoxLayout(config)
-        settings.setContentsMargins(10, 12, 10, 12)
-        settings.addWidget(QLabel('布局配置'))
-        settings.addWidget(self.make_drop_zone('横向分组', 'horizontal', self.horizontal))
-        settings.addWidget(self.make_drop_zone('纵向分组', 'vertical', self.vertical))
-        settings.addWidget(QLabel('格内排序'))
-        settings.addWidget(self.sort)
-        settings.addWidget(self.direction)
-        settings.addStretch()
-        self.config_scroll = QScrollArea()
-        self.config_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.config_scroll.setWidgetResizable(True)
-        self.config_scroll.setWidget(config)
-        self.config_scroll.setMinimumWidth(240)
-        self.config_scroll.setMaximumWidth(340)
-        split.addWidget(self.config_scroll)
-        self.config_toggle.toggled.connect(self.config_scroll.setVisible)
-        self.config_toggle.toggled.connect(lambda shown: self.config_toggle.setText(
-            '收起配置' if shown else '布局配置'))
-        self.config_toggle.setText('收起配置')
-        split.setSizes([160, 720, 260])
-        split.setStretchFactor(1, 1)
-        bar = ActionBar()
-        self.status = bar.summary
-        self.status.setText('读取数据后选择分组维度；导出保留当前卡片顺序。')
-        self.data_actions = []
+        center.addWidget(self.table, 1)
+        middle.addWidget(preview)
+        middle.setSizes([180, 1000])
+        middle.setStretchFactor(1, 1)
+        self.canvas_split.addWidget(middle)
+        self.canvas_split.setSizes([170, 650])
+        self.canvas_split.setStretchFactor(1, 1)
+        right.addWidget(self.canvas_split, 1)
+        actions = QHBoxLayout()
         for title, callback in [('保存布局模板', self.save_template),
                                 ('加载布局模板', self.load_template),
                                 ('导出当前矩阵 Excel', self.export)]:
-            button = make_button(title, 'primary' if callback == self.export else 'secondary')
+            button = QPushButton(title)
             button.clicked.connect(callback)
-            button.setEnabled(False)
-            button.setToolTip('请先读取数据并生成矩阵预览')
-            self.data_actions.append(button)
-            bar.row.addWidget(button)
-        layout.addWidget(bar)
+            actions.addWidget(button)
+        right.addLayout(actions)
+        split.addWidget(canvas)
+        split.setSizes([170, 1200])
+        split.setStretchFactor(1, 1)
+        self.status = QLabel('读取数据后，自由选择维度。格内卡片可拖动排序；导出保留当前顺序。')
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.setInterval(180)
@@ -366,19 +334,6 @@ class MatrixWorkspace(QWidget):
             combo.currentIndexChanged.connect(self.schedule_render)
         self.fields.itemChanged.connect(self.schedule_render)
         self.search.textChanged.connect(self.schedule_render)
-        THEME.changed.connect(self._refresh_matrix_theme)
-
-    def _refresh_matrix_theme(self, *_):
-        tokens = THEME.tokens()
-        top = getattr(self, 'header_rows', 0)
-        left = getattr(self, 'header_cols', 0)
-        for row in range(self.table.rowCount()):
-            columns = self.table.columnCount() if row < top else left
-            for column in range(columns):
-                item = self.table.item(row, column)
-                if item is not None:
-                    item.setBackground(QColor(tokens['secondary_hover']))
-                    item.setForeground(QColor(tokens['text']))
 
     def filter_fields(self, query):
         for i in range(self.fields.count()):
@@ -395,7 +350,8 @@ class MatrixWorkspace(QWidget):
 
     def make_drop_zone(self, title, role, control):
         zone = QWidget()
-        zone.setObjectName('MatrixDropZone')
+        zone.setObjectName('matrixDropZone')
+        zone.setStyleSheet('QWidget#matrixDropZone {border: 2px dashed #adb9ee; border-radius: 8px; background: #f3f5ff;}')
         box = QVBoxLayout(zone)
         box.setContentsMargins(6, 4, 6, 4)
         box.setSpacing(4)
@@ -416,14 +372,6 @@ class MatrixWorkspace(QWidget):
 
     def eventFilter(self, watched, event):
         kind = event.type()
-        role = watched.property('matrixDropRole')
-        if role in self.drop_targets and kind in (
-                QEvent.Type.DragEnter, QEvent.Type.DragLeave, QEvent.Type.Drop):
-            zone = self.drop_targets[role]
-            zone.setProperty('dropActive', kind == QEvent.Type.DragEnter
-                             and event.source() is self.fields)
-            zone.style().unpolish(zone)
-            zone.style().polish(zone)
         if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
             # Only the field library changes the layout; product drags retain InternalMove.
             if event.source() is self.fields and self.fields.currentItem():
@@ -498,8 +446,6 @@ class MatrixWorkspace(QWidget):
 
     def render(self):
         self.refresh_timer.stop()
-        for button in self.data_actions:
-            button.setEnabled(self.frame is not None)
         if self.frame is None:
             return
         self.card_summary.setText('卡片字段')
@@ -510,7 +456,6 @@ class MatrixWorkspace(QWidget):
             mask = frame.astype(str).apply(
                 lambda col: col.str.contains(query, case=False, regex=False)).any(axis=1)
             frame = frame[mask]
-        self.data_actions[-1].setEnabled(not frame.empty)
         sort = self.sort.currentText()
         if self.sort.currentIndex() > 0:
             key = frame[sort]
@@ -554,8 +499,8 @@ class MatrixWorkspace(QWidget):
             item = QTableWidgetItem(text)
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setBackground(QColor(THEME.tokens()['secondary_hover']))
-            item.setForeground(QColor(THEME.tokens()['text']))
+            item.setBackground(QColor('#eef2ff'))
+            item.setForeground(QColor('#273451'))
             self.table.setItem(row, col, item)
             if rows > 1 or cols > 1:
                 self.table.setSpan(row, col, rows, cols)
@@ -583,7 +528,7 @@ class MatrixWorkspace(QWidget):
                 cards.setWordWrap(True)
                 cards.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
                 self.register_drop_target(cards.viewport(), 'cards')
-                cards.setObjectName('MatrixCards')
+                cards.setStyleSheet('QListWidget::item {padding:10px; margin:4px; border:1px solid #dce2ef; border-radius:6px;}')
                 for index, product in products.iterrows():
                     label = '\n'.join(f'{field}: {cell_text(product[field])}' for field in attrs)
                     item = QListWidgetItem(label or f'产品 #{index + 1}')

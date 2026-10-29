@@ -4,9 +4,15 @@
 import os
 import sys
 import io
+import json
 import runpy
+import tempfile
 import threading
+import time
 import traceback
+import uuid
+from pathlib import Path
+
 from PyQt6.QtCore import QObject, pyqtSignal
 
 
@@ -49,11 +55,65 @@ class ScriptRunner(QObject):
     finished_signal = pyqtSignal(int)
     BUSY_EXIT_CODE = -2
     _execution_lock = threading.Lock()
+    # 协作停止：正在运行的任务各自的信号文件。关窗时只写文件、只等待，
+    # 不终止线程——daemon 线程被硬杀时脚本没机会执行 finally 与断点保存。
+    STOP_ENV = "PM_STACK_STOP_FILE"
+    _stop_files = {}
+    _stop_lock = threading.Lock()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._process = None
         self._thread = None
+
+    @classmethod
+    def stop_dir(cls):
+        directory = Path(tempfile.gettempdir()) / "pm-stack-stop"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    @classmethod
+    def _register_stop_file(cls, token, path):
+        with cls._stop_lock:
+            cls._stop_files[token] = Path(path)
+
+    @classmethod
+    def _release_stop_file(cls, token):
+        with cls._stop_lock:
+            path = cls._stop_files.pop(token, None)
+        # 自己创建的信号文件运行结束即清理，避免长期累积小文件。
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    @classmethod
+    def request_stop_all(cls):
+        """给所有在跑的任务写协作停止信号；返回成功写入的路径。"""
+        with cls._stop_lock:
+            targets = list(cls._stop_files.values())
+        written = []
+        for path in targets:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"stop": True}), encoding="utf-8")
+                written.append(str(path))
+            except OSError:
+                pass
+        return written
+
+    @classmethod
+    def wait_until_idle(cls, timeout=600.0, poll=0.05, pump=None):
+        """等待执行锁释放，最多 timeout 秒。pump 用于保持界面响应。"""
+        deadline = time.monotonic() + timeout
+        while cls._execution_lock.locked():
+            if time.monotonic() >= deadline:
+                return False
+            if pump is not None:
+                pump()
+            time.sleep(poll)
+        return True
 
     def is_running(self):
         thread_running = bool(self._thread and self._thread.is_alive())
@@ -90,19 +150,30 @@ class ScriptRunner(QObject):
             self.finished_signal.emit(self.BUSY_EXIT_CODE)
             return False
 
+        env = dict(env_extra or {})
+        token = uuid.uuid4().hex
+        try:
+            stop_path = self.stop_dir() / f"stop-{token}.json"
+        except OSError:
+            self._execution_lock.release()
+            raise
+        env[self.STOP_ENV] = str(stop_path)
+        self._register_stop_file(token, stop_path)
+
         self._thread = threading.Thread(
             target=self._run_script_thread,
-            args=(script_path, args or [], env_extra or {}),
+            args=(script_path, args or [], env, token),
             daemon=True,
         )
         try:
             self._thread.start()
         except Exception:
+            self._release_stop_file(token)
             self._execution_lock.release()
             raise
         return True
 
-    def _run_script_thread(self, script_path, args, env_extra):
+    def _run_script_thread(self, script_path, args, env_extra, stop_token=None):
         script_path = os.path.abspath(script_path)
         script_dir = os.path.dirname(script_path)
         script_parent = os.path.dirname(script_dir)
@@ -163,6 +234,8 @@ class ScriptRunner(QObject):
                 os.environ.pop("PYTHONUNBUFFERED", None)
             else:
                 os.environ["PYTHONUNBUFFERED"] = old_unbuffered
+            if stop_token is not None:
+                self._release_stop_file(stop_token)
             self._execution_lock.release()
 
         # 完成信号在全局状态恢复、执行锁释放后发送，串联任务可立即启动。

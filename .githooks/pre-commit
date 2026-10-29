@@ -1,0 +1,18 @@
+#!/bin/sh
+# Shared by this repository's worktrees; inspect the actual committing worktree.
+set -eu
+hook_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(git rev-parse --show-toplevel)
+for runner in "$repo_root/.venv-review/Scripts/python.exe" "$repo_root/.venv/Scripts/python.exe" "$hook_root/.venv-review/Scripts/python.exe" "$repo_root/.venv/bin/python" "$hook_root/.venv-review/bin/python"; do
+    if [ -x "$runner" ]; then
+        exec "$runner" "$hook_root/tools/handoff.py" check --repo "$repo_root" --staged
+    fi
+done
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$hook_root/tools/handoff.py" check --repo "$repo_root" --staged
+fi
+if command -v python >/dev/null 2>&1; then
+    exec python "$hook_root/tools/handoff.py" check --repo "$repo_root" --staged
+fi
+printf '%s\n' 'Handoff check: Python 3.10+ is required; no commit was created.' >&2
+exit 2

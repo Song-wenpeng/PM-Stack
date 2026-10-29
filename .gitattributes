@@ -1,0 +1,2 @@
+# Keep the Git hook runnable after a Windows checkout.
+.githooks/* text eol=lf

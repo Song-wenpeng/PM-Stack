@@ -13,17 +13,20 @@
 import os
 import sys
 import importlib
+import time
+import traceback
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStatusBar, QDialog, QFormLayout, QLineEdit, QDialogButtonBox,
     QGroupBox, QMessageBox, QCheckBox, QScrollArea, QStackedWidget,
     QToolButton, QButtonGroup, QFrame, QApplication, QSizePolicy,
+    QProgressBar,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QScreen, QShortcut, QKeySequence
 
-from .config_manager import ConfigManager
+from .config_manager import ConfigManager, DEFAULT_VISION_MODEL
 from .runner import ScriptRunner
 from .theme import THEME
 from .icons import get_icon, get_module_icon
@@ -32,18 +35,20 @@ from .app_updater import ApplicationUpdater, launch_updater_helper
 from .widgets import make_button, make_hint_label
 
 
-CURRENT_VERSION = "v1.11.5"
+CURRENT_VERSION = "v1.11.6"
 APP_NAME = "PM Stack"
 APP_TITLE = f"{APP_NAME} {CURRENT_VERSION}"
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, startup_warnings=()):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
         self.setMinimumSize(880, 620)
 
         self.config_mgr = ConfigManager()
+        # 入口在待恢复备份处理前会先读配置；坏文件已隔离后第二次读取不再告警。
+        self._entry_config_warnings = tuple(startup_warnings)
         self.app_updater = ApplicationUpdater(self)
         self.updater = Updater(self)
         self.app_updater.check_finished.connect(
@@ -59,10 +64,13 @@ class MainWindow(QMainWindow):
         self._modules = []          # [(info, widget), ...]
         self._module_runners = []   # 每个模块独立信号，执行仍全局串行
         self._nav_buttons = []      # 与 _modules 对应的导航按钮
+        self._module_failures = []  # [(名称, 原因), ...] 单个模块坏掉不拖垮整个应用
+        self._startup_issues = []   # 启动后一次性告知用户的模块与配置问题
         self._init_ui()
         self._load_modules()
         self._update_status()
         self._set_initial_geometry()
+        self._report_startup_issues()
 
         # 启动时检查主程序更新（共享盘或公开 HTTPS 地址）。
         manifest_source = self.config_mgr.get_app_update_manifest_source()
@@ -81,11 +89,19 @@ class MainWindow(QMainWindow):
     # ================================================================
 
     def _set_initial_geometry(self):
-        screen = QScreen.availableGeometry(QApplication.primaryScreen())
-        w = max(1080, min(int(screen.width() * 0.82), 1440))
-        h = max(700, min(int(screen.height() * 0.85), 900))
-        self.setGeometry(
-            (screen.width() - w) // 2, (screen.height() - h) // 2, w, h)
+        """初始几何必须完整落在可用区域内。
+
+        可用区域带屏幕原点：非主屏或有偏移的屏幕上只按宽高居中会把窗口摆到屏幕外。
+        1080x700 只是期望值，小屏上以可用区域为硬上限，不能强行放大。
+        """
+        area = QScreen.availableGeometry(QApplication.primaryScreen())
+        w = min(1440, max(1080, int(area.width() * 0.82)), area.width())
+        h = min(900, max(700, int(area.height() * 0.85)), area.height())
+        # 最小尺寸同样不能超过可用区域，否则 Qt 会把窗口重新撑大到屏幕外。
+        self.setMinimumSize(min(880, area.width()), min(620, area.height()))
+        x = area.x() + (area.width() - w) // 2
+        y = area.y() + (area.height() - h) // 2
+        self.setGeometry(x, y, w, h)
 
     def _init_ui(self):
         central = QWidget()
@@ -244,9 +260,17 @@ class MainWindow(QMainWindow):
 
         first_btn = None
         for info, widget_cls in unique:
+            name = info.get("name", "未知")
             runner = ScriptRunner(self)
+            # 单个模块构造失败只跳过该模块，其余功能照常可用。
+            try:
+                widget = widget_cls(self.config_mgr, runner)
+            except Exception as exc:
+                self._module_failures.append((name, f'{type(exc).__name__}: {exc}'))
+                traceback.print_exc()
+                runner.deleteLater()
+                continue
             self._module_runners.append(runner)
-            widget = widget_cls(self.config_mgr, runner)
             index = self.stack.count()
             self._modules.append((info, widget))
             # Workspaces own their scrolling and keep actions in view.
@@ -314,6 +338,9 @@ class MainWindow(QMainWindow):
                 if info and widget_cls and issubclass(widget_cls, QWidget):
                     discovered.append((info, widget_cls, source))
             except Exception as e:
+                # 只 print 等于没人看见；失败要汇总后告知用户。
+                self._module_failures.append(
+                    (module_name, f'{type(e).__name__}: {e}'))
                 print(f"[警告] 加载{source}模块 {module_name} 失败: {e}")
 
     def _switch_module(self, index):
@@ -407,6 +434,9 @@ class MainWindow(QMainWindow):
                 "源码运行时只验证下载，不会替换 Python 入口。请在打包版本中测试安装。",
             )
             return
+        # 更新退出同样会终止 daemon 线程，先走与关窗一致的确认。
+        if not self._confirm_exit_while_running("安装更新并重启"):
+            return
         manifest = self.app_updater.get_manifest()
         if manifest is None:
             QMessageBox.warning(self, "更新失败", "更新清单状态已失效，请重新检查。")
@@ -449,6 +479,112 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "更新完成", message)
         else:
             QMessageBox.warning(self, "更新失败", message)
+
+    # ================================================================
+    # 退出与任务生命周期
+    # ================================================================
+
+    EXIT_WAIT = "wait"
+    EXIT_STOP = "stop"
+    EXIT_FORCE = "force"
+    EXIT_CANCEL = "cancel"
+
+    def closeEvent(self, event):
+        if self._confirm_exit_while_running("关闭 PM Stack"):
+            event.accept()
+        else:
+            event.ignore()
+
+    def _confirm_exit_while_running(self, action_label, ask=None, wait=None):
+        """返回 True 才允许退出。
+
+        脚本跑在 daemon 线程里，解释器一退出线程就被硬终止，脚本没机会执行
+        finally 与断点保存。所以这里只写协作停止信号并等待，不杀线程。
+        ask / wait 可注入，便于测试决策分支。
+        """
+        if not ScriptRunner.is_any_running():
+            return True
+        choice = (ask or self._ask_exit_choice)(action_label)
+        if choice == self.EXIT_CANCEL:
+            return False
+        if choice == self.EXIT_FORCE:
+            self.show_status("已按强制退出处理，未保存的批次可能丢失。", 8000)
+            return True
+        if choice == self.EXIT_STOP:
+            written = ScriptRunner.request_stop_all()
+            self.show_status(f"已请求 {len(written)} 个任务安全停止，正在等待保存…", 8000)
+        finished = bool((wait or self._block_until_idle)())
+        if not finished:
+            self.show_status("任务仍未结束，已取消本次退出；可再次尝试或选择强制退出。", 8000)
+        return finished
+
+    def _ask_exit_choice(self, action_label):
+        box = QMessageBox(self)
+        box.setWindowTitle("任务正在运行")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"{action_label}前检测到仍有任务在运行。")
+        box.setInformativeText(
+            "直接退出会中断脚本，未保存的批次可能丢失。\n"
+            "可以等待任务自然完成，或请求安全停止——脚本会保存已完成的行与断点后再退出。")
+        wait_btn = box.addButton("等待完成", QMessageBox.ButtonRole.AcceptRole)
+        stop_btn = box.addButton("请求停止并等待保存", QMessageBox.ButtonRole.AcceptRole)
+        force_btn = box.addButton("强制退出（可能丢数据）",
+                                  QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(wait_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is stop_btn:
+            return self.EXIT_STOP
+        if clicked is force_btn:
+            return self.EXIT_FORCE
+        if clicked is cancel_btn:
+            return self.EXIT_CANCEL
+        return self.EXIT_WAIT
+
+    def _block_until_idle(self, timeout=600.0):
+        """等待执行锁释放；可放弃等待，超时也不强行退出。"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("等待任务安全保存")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        label = QLabel("正在等待任务保存已完成的结果与断点，请不要强制结束进程。")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        bar = QProgressBar()
+        bar.setRange(0, 0)
+        layout.addWidget(bar)
+        give_up = make_button("放弃等待", "secondary")
+        layout.addWidget(give_up)
+        abandoned = []
+        give_up.clicked.connect(lambda: (abandoned.append(True), dialog.reject()))
+        dialog.show()
+        deadline = time.monotonic() + timeout
+        try:
+            while ScriptRunner.is_any_running():
+                if abandoned or time.monotonic() >= deadline:
+                    return False
+                QApplication.processEvents()
+                time.sleep(0.05)
+            return True
+        finally:
+            dialog.close()
+
+    def _report_startup_issues(self):
+        """模块加载失败与配置警告此前只 print 或根本没被读取，这里统一告知用户。"""
+        issues = [f"模块「{name}」未能加载：{detail}"
+                  for name, detail in self._module_failures]
+        issues += list(dict.fromkeys(str(warning) for warning in
+                       (*self._entry_config_warnings, *self.config_mgr.get_warnings())))
+        self._startup_issues = issues
+        if issues:
+            self._show_startup_issues(issues)
+
+    def _show_startup_issues(self, issues):
+        QMessageBox.warning(
+            self, "启动警告",
+            "以下问题不影响其余功能，但需要你留意：\n\n"
+            + "\n".join(f"· {item}" for item in issues))
 
     def _open_settings(self):
         dlg = SettingsDialog(self.config_mgr, self.updater, self)
@@ -509,7 +645,8 @@ class SettingsDialog(QDialog):
         vision_form = QFormLayout(vision_group)
 
         vision_note = QLabel(
-            "留空则使用上方 API 配置。图片识别需要支持视觉的模型（如 Qwen-VL、GPT-4o 等）。")
+            "Vision API Key 与 Base URL 留空时继承上方配置；模型名留空则使用内置默认视觉模型"
+            f"（{DEFAULT_VISION_MODEL}），不会继承上方的文本模型——文本模型通常不支持图片输入。")
         vision_note.setObjectName("FormHint")
         vision_note.setWordWrap(True)
         vision_form.addRow(vision_note)
@@ -524,7 +661,9 @@ class SettingsDialog(QDialog):
         vision_form.addRow("Vision Base URL:", self.vision_url_edit)
 
         self.vision_model_edit = QLineEdit(config_mgr.get("vision_model_name", ""))
-        self.vision_model_edit.setPlaceholderText("如 Qwen/Qwen3-VL-30B-A3B-Instruct")
+        # 占位符显示留空时真正生效的模型，而不是一个含糊的示例。
+        self.vision_model_edit.setPlaceholderText(
+            f"留空则使用 {config_mgr.effective_vision_model()}")
         vision_form.addRow("Vision Model:", self.vision_model_edit)
 
         layout.addWidget(vision_group)

@@ -2,7 +2,7 @@
 
 面向跨境电商运营与产品研究的 Windows 桌面工作台，基于 Python / PyQt6，提供评论分析、销量数据、产品矩阵、市场规划和展示看板五个模块。
 
-当前版本：**v1.11.5**（2026-10-22）。
+当前版本：**v1.11.6**（2026-10-29）。
 
 - [新增展示看板：使用说明与统计口径](docs/展示看板使用说明.md)
 
@@ -72,11 +72,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup_review_env.ps1
 
 也可运行 `start-pm-stack.bat`。依赖见 `requirements.txt`，构建约束见 `requirements-review.lock.txt`。Amazon 采集使用 Playwright 控制系统 Edge；商品补抓默认在后台运行，验证码、页面不可访问或加载超时均可能导致补抓失败。
 
+## 开发协作与交接检查
+
+开工先读 [AGENTS.md](AGENTS.md)、[任务索引](CURRENT.md) 和本任务记录，再运行 `协作检查.cmd status`；收工运行 `协作检查.cmd check`。新任务使用 [交接模板](handoffs/TEMPLATE.md)，同任务持续维护原记录。Git 钩子安装、暂存检查、跨工作树和 CI 边界见 [使用说明](handoffs/README.md)。
+
 ## 测试与打包
 
 ```powershell
 .\.venv-review\Scripts\python.exe tools/run_tests.py --timeout 240
-.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.5.spec"
+.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.6.spec"
 .\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm "PM Stack Updater.spec"
 ```
 
