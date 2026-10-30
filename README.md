@@ -2,7 +2,7 @@
 
 面向跨境电商运营与产品研究的 Windows 桌面工作台，基于 Python / PyQt6，提供评论分析、销量数据、产品矩阵、市场规划和展示看板五个模块。
 
-当前版本：**v1.11.7**（2026-10-29）。
+当前版本：**v1.11.8**（2026-10-30）。
 
 - [新增展示看板：使用说明与统计口径](docs/展示看板使用说明.md)
 
@@ -17,7 +17,7 @@
 |---|---|
 | 评论分析 | Excel 导入及 Amazon 评论采集、本地评论库、品类与提示词管理、逐条标签提取与汇总报告、分析记录与断点续跑 |
 | 销量数据 | 单文件与批量拆分、销量/销额修正、历史数据提取、交叉属性趋势与品牌/类别份额 |
-| 产品矩阵 | 自由组合矩阵（顶部字段库、左右分组）、销额透视与导出 |
+| 产品矩阵 | 自由组合矩阵（顶部字段库、左右分组）、使用场景矩阵、销额透视、品牌×分类矩阵与导出 |
 | 市场规划 | 文本及图片字段提取、商品资料补抓、标签筛选、字段模板、机会得分与类目筛选 |
 | 展示看板 | 自动关联商品特征与历史销量/销额、属性筛选、覆盖率、份额与趋势、明细追溯、图表和数据导出、发送产品矩阵 |
 
@@ -80,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup_review_env.ps1
 
 ```powershell
 .\.venv-review\Scripts\python.exe tools/run_tests.py --timeout 240
-.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.7.spec"
+.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.8.spec"
 .\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm "PM Stack Updater.spec"
 ```
 

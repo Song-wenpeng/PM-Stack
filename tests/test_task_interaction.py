@@ -115,7 +115,7 @@ class TaskInteractionTests(unittest.TestCase):
         matrix.matrix2_sheet.setText('元数据')
         matrix.matrix2_row_col.setText('手动列名')
         matrix.matrix2_file.setText(str(path))
-        choices = matrix._excel_choices[0]
+        choices = matrix._excel_choices[1]
         self.wait_for(lambda: len(choices.metadata) == 2)
         self.assertGreaterEqual(matrix.matrix2_sheet.findText('月数据'), 0)
         self.assertGreaterEqual(matrix.matrix2_row_col.findText('颜色'), 0)

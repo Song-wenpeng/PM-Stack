@@ -1,8 +1,8 @@
 {
-  "version": "v1.11.7",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.7/PM-Stack.exe",
-  "sha256": "6ad64b8e90e7dfdbbe6be65e2115353e458d41cb7f33245a9bb720ce18334242",
-  "size": 134162835,
+  "version": "v1.11.8",
+  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.8/PM-Stack.exe",
+  "sha256": "130d97949859171904e45f9689394f5f5af2aec62f4d1d9878a6300de53cfad4",
+  "size": 134164660,
   "mandatory": false,
-  "notes": "自由组合矩阵字段库移到顶部横向排列，纵向分组在左、横向分组在右；移除产品矩阵介绍区、使用场景矩阵和品牌分类矩阵入口，保留销额透视。"
+  "notes": "恢复使用场景矩阵和品牌×分类矩阵，保留自由组合矩阵顶部字段库、左右分组的新布局；补充两项恢复模块的源文件防覆盖保护。"
 }

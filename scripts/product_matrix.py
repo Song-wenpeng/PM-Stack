@@ -138,6 +138,11 @@ def delete_used_images(image_paths):
 # 主程序
 # ======================
 
+from pathlib import Path
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.report_io import require_distinct
+
 def main():
     if not EXCEL_FILE:
         print("错误: 未指定源 Excel 文件（MATRIX_EXCEL_FILE）")
@@ -149,6 +154,7 @@ def main():
         print("错误: 未指定输出文件路径（MATRIX_OUTPUT_FILE）")
         sys.exit(1)
 
+    require_distinct(EXCEL_FILE, OUTPUT_FILE)
     used_image_paths = []
     image_dir = Path(IMAGE_DIR)
     image_dir.mkdir(parents=True, exist_ok=True)

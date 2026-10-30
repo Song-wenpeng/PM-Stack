@@ -647,8 +647,14 @@ def create_workbook(
 # 主入口
 # ============================================================
 
+from pathlib import Path
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.report_io import require_distinct
+
 def main():
     args = parse_args()
+    require_distinct(args.file, args.output)
 
     # 图片缓存目录
     image_dir = args.image_dir or os.path.join(

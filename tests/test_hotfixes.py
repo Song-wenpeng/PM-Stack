@@ -323,7 +323,7 @@ class UIInteractionTests(unittest.TestCase):
                 sales.cross_trend_mode.setCurrentIndex(2)
                 self.assertIn("均价", sales.cross_mode_hint.text())
 
-                self.assertEqual(matrix.matrix_tabs.count(), 2)
+                self.assertEqual(matrix.matrix_tabs.count(), 4)
                 self.assertIs(matrix.matrix_tabs.currentWidget(), matrix.free_matrix)
 
                 market.tag_input.setText(first)
