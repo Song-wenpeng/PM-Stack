@@ -1,8 +1,8 @@
 {
-  "version": "v1.11.8",
-  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.8/PM-Stack.exe",
-  "sha256": "130d97949859171904e45f9689394f5f5af2aec62f4d1d9878a6300de53cfad4",
-  "size": 134164660,
+  "version": "v1.11.9",
+  "url": "https://github.com/Song-wenpeng/PM-Stack/releases/download/v1.11.9/PM-Stack.exe",
+  "sha256": "e49a07e838efe112267775dba5d5b79a061e0fe653a54a2dc3309177b7656d0f",
+  "size": 134166817,
   "mandatory": false,
-  "notes": "恢复使用场景矩阵和品牌×分类矩阵，保留自由组合矩阵顶部字段库、左右分组的新布局；补充两项恢复模块的源文件防覆盖保护。"
+  "notes": "展示看板由商品属性主表确定样本，按 ASIN 读取历史销量和销额。"
 }

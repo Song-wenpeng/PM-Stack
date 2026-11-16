@@ -2,7 +2,7 @@
 
 面向跨境电商运营与产品研究的 Windows 桌面工作台，基于 Python / PyQt6，提供评论分析、销量数据、产品矩阵、市场规划和展示看板五个模块。
 
-当前版本：**v1.11.8**（2026-10-30）。
+当前版本：**v1.11.9**（2026-11-16）。
 
 - [新增展示看板：使用说明与统计口径](docs/展示看板使用说明.md)
 
@@ -80,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup_review_env.ps1
 
 ```powershell
 .\.venv-review\Scripts\python.exe tools/run_tests.py --timeout 240
-.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.8.spec"
+.\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist --workpath build "PM Stack v1.11.9.spec"
 .\.venv-review\Scripts\python.exe -m PyInstaller --noconfirm "PM Stack Updater.spec"
 ```
 

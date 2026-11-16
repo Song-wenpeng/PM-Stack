@@ -128,9 +128,17 @@ class DashboardDataTests(unittest.TestCase):
         missing = from_history(meta, units, revenue.drop(columns='2026-01'), {'ASIN': 'ASIN'}, 'US', 'USD')
         self.assertTrue(pd.isna(analyze(missing, query())['kpi']['销售额']))
         with self.assertRaises(ValueError):
-            from_history(meta.iloc[:1], units, revenue, {'ASIN': 'ASIN'}, 'US', 'USD')
-        with self.assertRaises(ValueError):
             from_history(meta, pd.concat([units, units.iloc[:1]]), revenue, {'ASIN': 'ASIN'}, 'US', 'USD')
+
+    def test_history_adapter_preserves_master_when_neither_history_matches(self):
+        meta = pd.DataFrame({'子ASIN': [' a1 '], '插位数': [3]})
+        units = pd.DataFrame({'ASIN': ['B1'], '2025-12': [10]})
+        revenue = pd.DataFrame({'ASIN': ['B1'], '2026-01': [100]})
+        loaded = from_history(meta, units, revenue, {'ASIN': '子ASIN'}, 'US', 'USD')
+
+        self.assertEqual(loaded.frame['ASIN'].tolist(), ['A1', 'A1'])
+        self.assertEqual(set(loaded.frame['月份']), {'2025-12', '2026-01'})
+        self.assertTrue(loaded.frame[['销量', '销售额']].isna().all().all())
 
     def test_top_and_other_preserve_total_and_handle_name_collision(self):
         frame = fixture().iloc[:1]

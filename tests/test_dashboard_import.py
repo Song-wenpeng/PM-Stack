@@ -86,6 +86,31 @@ class DashboardImportTests(unittest.TestCase):
         self.assertEqual(r['trend'].iloc[0]['所选品牌份额'], .75)
         self.assertTrue(pd.isna(r['kpi']['同比']))
 
+    def test_master_defines_samples_even_with_extra_and_missing_history(self):
+        self.meta = pd.concat([self.meta, pd.DataFrame({
+            'ASIN': ['B000000003', 'B000000004'], '品牌': ['Gamma', 'Delta'],
+            '插孔数': ['3', '3'], '分类': ['排插', '排插'],
+        })], ignore_index=True)
+        # A wider history export may have repeated records outside the research sample.
+        self.units = pd.concat([self.units, pd.DataFrame({
+            'ASIN': ['B000000005', 'B000000005', 'B000000004'],
+            '2026-01': [900, 901, 5],
+        })], ignore_index=True)
+        self.revenue.loc[2] = ['B000000006', 9000, 9000]
+        self.write_book()
+
+        data, _ = load_workbook(str(self.path))
+        self.assertEqual(set(data.frame['ASIN']), {
+            'B000000001', 'B000000002', 'B000000003', 'B000000004',
+        })
+        q = Query('2026-01', '2026-01', 'US', 'USD', filters={'插孔数': ['3']})
+        result = analyze(data, q)
+        self.assertEqual(result['kpi']['总ASIN'], 3)
+        self.assertEqual(result['kpi']['活跃ASIN'], 2)
+        self.assertEqual(result['kpi']['销量'], 25)
+        self.assertEqual(result['kpi']['销售额'], 200)
+        self.assertAlmostEqual(result['kpi']['数据覆盖率'], 1 / 3)
+
     def test_feature_filter_and_matrix_use_the_same_history(self):
         data, _ = load_workbook(str(self.path))
         q = Query('2025-01', '2026-01', 'US', 'USD', filters={'插孔数': ['6'], '打标': ['1']})
@@ -94,6 +119,19 @@ class DashboardImportTests(unittest.TestCase):
         snapshot = product_snapshot(r['detail'], data.available_history)
         self.assertEqual(snapshot.iloc[0]['销售额'], 600)
         self.assertEqual(snapshot.iloc[0]['品牌'], 'Beta')
+
+    def test_asins_are_read_as_identifiers_in_every_sheet(self):
+        for asin, extra in [('0123456789', 'B000000001'), (1234567890, None)]:
+            with self.subTest(asin=asin):
+                self.meta = pd.DataFrame({' 子ASIN ': [asin], '品牌': ['Alpha']})
+                self.units = pd.DataFrame({' ASIN ': [asin, extra], '2026-01': [30, 900]})
+                self.revenue = pd.DataFrame({'ASIN': [asin], '2026-01': [300]})
+                self.write_book()
+
+                data, _ = load_workbook(str(self.path))
+                self.assertEqual(data.frame['ASIN'].tolist(), [str(asin)])
+                self.assertEqual(data.frame['销量'].tolist(), [30])
+                self.assertEqual(data.frame['销售额'].tolist(), [300])
 
     def test_weighted_price_uses_paired_samples(self):
         self.revenue.loc[1, '2026-01'] = None

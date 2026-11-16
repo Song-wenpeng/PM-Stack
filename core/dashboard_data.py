@@ -116,19 +116,23 @@ def normalize(frame, mapping, site='', currency='', source=''):
 
 
 def from_history(meta, units, revenue, mapping, site='', currency='', source=''):
-    """Join existing ASIN × month sheets without summing duplicate identifiers."""
+    """Read each metric for the ASINs in the product master."""
     meta, units, revenue = map(clean_frame, (meta, units, revenue))
     asin_col = mapping.get('ASIN')
     if not asin_col or asin_col not in meta:
         raise ValueError('请映射属性表中的 ASIN。')
     meta = meta.rename(columns={asin_col: 'ASIN'})
-    for frame in (meta, units, revenue):
+    meta['ASIN'] = meta['ASIN'].fillna('').astype(str).str.strip().str.upper()
+    if meta['ASIN'].eq('').any() or meta['ASIN'].duplicated().any():
+        raise ValueError('商品属性表的 ASIN 必须唯一且不为空；多站点请使用月度明细模式。')
+
+    def melt(frame, metric):
         if 'ASIN' not in frame:
             raise ValueError('历史销量/销额表必须包含名为 ASIN 的列。')
         frame['ASIN'] = frame['ASIN'].fillna('').astype(str).str.strip().str.upper()
-        if frame['ASIN'].eq('').any() or frame['ASIN'].duplicated().any():
-            raise ValueError('历史表模式要求每张表的 ASIN 唯一且不为空；多站点请使用月度明细模式。')
-    def melt(frame, metric):
+        frame = frame.loc[frame['ASIN'].isin(meta['ASIN'])]
+        if frame['ASIN'].duplicated().any():
+            raise ValueError(f'历史{metric}表中，与商品主表匹配的 ASIN 存在重复。请统一口径后导入。')
         cols = {}
         for col in frame.columns:
             if col == 'ASIN':
@@ -139,11 +143,10 @@ def from_history(meta, units, revenue, mapping, site='', currency='', source='')
                 continue
         if not cols or len(set(cols.values())) != len(cols):
             raise ValueError('历史表缺少月份列或月份重复；请使用 YYYY-MM 表头。')
-        return frame[['ASIN', *cols]].rename(columns=cols).melt('ASIN', var_name='月份', value_name=metric)
+        aligned = frame.set_index('ASIN')[list(cols)].reindex(meta['ASIN']).rename(columns=cols)
+        return aligned.reset_index().melt('ASIN', var_name='月份', value_name=metric)
+
     long = melt(units, '销量').merge(melt(revenue, '销售额'), on=['ASIN', '月份'], how='outer', validate='one_to_one')
-    missing = set(long['ASIN']) - set(meta['ASIN'])
-    if missing:
-        raise ValueError(f'有 {len(missing)} 个历史 ASIN 缺少属性资料，例如 {sorted(missing)[0]}。')
     # Historical metrics replace current snapshot metrics, avoiding ambiguous names.
     meta = meta.drop(columns=['月份', *METRICS, '均价'], errors='ignore')
     data = long.merge(meta, on='ASIN', how='left', validate='many_to_one')

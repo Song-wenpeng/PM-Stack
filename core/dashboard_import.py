@@ -16,6 +16,15 @@ def mapping_for(columns):
     return {key: next((alias for alias in aliases if alias in columns), '') for key, aliases in ALIASES.items()}
 
 
+def read_asin_sheet(book, sheet, asin_column):
+    headers = pd.read_excel(book, sheet_name=sheet, nrows=0).columns
+    raw_asin = next((column for column in headers if str(column).strip() == asin_column), None)
+    dtype = {raw_asin: str} if raw_asin is not None else None
+    frame = pd.read_excel(book, sheet_name=sheet, dtype=dtype)
+    frame.columns = [str(column).strip() for column in frame.columns]
+    return frame
+
+
 def detect_workbook(book):
     """Read headers only. Ambiguous roles require adjustment, never select by row order."""
     headers = {name: [str(c).strip() for c in pd.read_excel(book, sheet_name=name, nrows=0).columns]
@@ -127,16 +136,16 @@ def load_workbook(path, options=None):
         if options is None and not detected['ready']:
             return None, detected
         opt = detected
-        data = pd.read_excel(book, sheet_name=opt['sheet'])
+        data = read_asin_sheet(book, opt['sheet'], opt['mapping']['ASIN'])
         args = (opt['mapping'], opt['site'], opt['currency'], path)
         if opt['mode']:
             data, issues = consolidate_attributes(data, opt['mapping']['ASIN'])
-            result = from_history(data, pd.read_excel(book, sheet_name=opt['units']),
-                                  pd.read_excel(book, sheet_name=opt['revenue']), *args)
+            result = from_history(data, read_asin_sheet(book, opt['units'], 'ASIN'),
+                                  read_asin_sheet(book, opt['revenue'], 'ASIN'), *args)
             result.available_history = True
             result.issues = issues
             result.notes = [note.replace('相关汇总显示不可用，不按 0 处理', '按已知记录汇总，并显示覆盖率；空白不补零') for note in result.notes]
-            result.notes.insert(0, f'按 ASIN 关联：{opt["sheet"]} + {opt["units"]} + {opt["revenue"]}。属性为主表当前快照。')
+            result.notes.insert(0, f'以「{opt["sheet"]}」为商品样本，按 ASIN 读取「{opt["units"]}」和「{opt["revenue"]}」。属性为主表当前快照。')
             if issues:
                 result.notes.insert(1, f'发现 {len(issues)} 项属性关联问题，可在“数据说明”查看处理明细。')
         else:

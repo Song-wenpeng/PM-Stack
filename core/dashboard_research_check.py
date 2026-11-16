@@ -1,6 +1,7 @@
 """Opt-in local verification of an actual research workbook; never modifies input."""
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import QApplication
 
 from core.dashboard_data import Query, analyze
+from core.dashboard_import import read_asin_sheet
 from core.theme import THEME
 
 
@@ -32,24 +34,31 @@ def verify_research(window, source, target):
     opt = data.import_options
     latest = max(data.frame['月份'])
     with pd.ExcelFile(source) as book:
-        units = pd.read_excel(book, sheet_name=opt['units'])
-        revenue = pd.read_excel(book, sheet_name=opt['revenue'])
-        meta = pd.read_excel(book, sheet_name=opt['sheet'])
+        units = read_asin_sheet(book, opt['units'], 'ASIN')
+        revenue = read_asin_sheet(book, opt['revenue'], 'ASIN')
+        meta = read_asin_sheet(book, opt['sheet'], opt['mapping']['ASIN'])
+    meta_asin = meta[opt['mapping']['ASIN']].astype('string').str.strip().str.upper()
+    units_asin = units['ASIN'].astype('string').str.strip().str.upper()
+    revenue_asin = revenue['ASIN'].astype('string').str.strip().str.upper()
     q = Query(latest, latest, opt['site'], opt['currency'])
     result = analyze(data, q)
-    expected_units = pd.to_numeric(units[latest], errors='raise').sum(min_count=1)
-    expected_revenue = pd.to_numeric(revenue[latest], errors='raise').sum(min_count=1)
-    assert abs(result['kpi']['销量'] - expected_units) < .001
-    assert abs(result['kpi']['销售额'] - expected_revenue) < .01
-    assert result['coverage']['known'] == int(revenue[latest].notna().sum())
+    matched_units = pd.to_numeric(units.loc[units_asin.isin(meta_asin), latest], errors='raise')
+    matched_revenue = pd.to_numeric(revenue.loc[revenue_asin.isin(meta_asin), latest], errors='raise')
+    expected_units = matched_units.sum(min_count=1)
+    expected_revenue = matched_revenue.sum(min_count=1)
+    for actual, expected in ((result['kpi']['销量'], expected_units), (result['kpi']['销售额'], expected_revenue)):
+        assert (pd.isna(actual) and pd.isna(expected)) or math.isclose(actual, expected, abs_tol=.001)
+    assert result['coverage']['known'] == int(matched_revenue.notna().sum())
+    assert set(data.frame['ASIN']) == set(meta_asin)
     assert not data.frame.duplicated(['站点', '币种', 'ASIN', '月份']).any()
     # Independently filter the real source's feature columns and sum its historical columns.
-    selected = set(meta.loc[(pd.to_numeric(meta['打标'], errors='coerce') == 1) &
-                            (pd.to_numeric(meta['插孔数'], errors='coerce') == 3), 'ASIN'])
+    selected = set(meta_asin[(pd.to_numeric(meta['打标'], errors='coerce') == 1) &
+                             (pd.to_numeric(meta['插孔数'], errors='coerce') == 3)])
     q.filters = {'打标': ['1'], '插孔数': ['3']}
     filtered = analyze(data, q)
-    expected_filtered = revenue.loc[revenue['ASIN'].isin(selected), latest].sum(min_count=1)
-    assert abs(filtered['kpi']['销售额'] - expected_filtered) < .01
+    expected_filtered = revenue.loc[revenue_asin.isin(selected), latest].sum(min_count=1)
+    actual_filtered = filtered['kpi']['销售额']
+    assert (pd.isna(actual_filtered) and pd.isna(expected_filtered)) or math.isclose(actual_filtered, expected_filtered, abs_tol=.01)
     assert set(filtered['market']['ASIN']) == selected
     window._switch_module(index)
     window.resize(1360, 1000)
